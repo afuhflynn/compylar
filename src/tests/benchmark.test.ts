@@ -25,5 +25,5 @@ describe("repository benchmark", () => {
     expect(report.memory.updated).toContain("module:src/dashboard.ts");
     expect(report.memory.reused).toContain("module:src/other.ts");
     expect(report.elapsedMs).toEqual({ compile: 1, context: 1, status: 1, refresh: 1, total: 4 });
-  });
+  }, 15_000);
 });

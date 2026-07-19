@@ -65,7 +65,7 @@ export const TrackedFileSchema = z.object({
 });
 export const MemoryChunkSchema = z.object({
   id: z.string(),
-  kind: z.enum(["repository", "package", "module", "route", "dependency", "test-strategy"]),
+  kind: z.enum(["repository", "package", "module", "route", "dependency", "test-strategy", "entry-point", "configuration", "documentation"]),
   title: z.string(),
   summary: z.string(),
   sourcePaths: z.array(z.string()),

@@ -43,7 +43,7 @@ AI interpretation may add architecture prose, risks, and task summaries. It must
 
 ## Brain v2
 
-`RepositoryBrain` is versioned with `brainVersion: 2`. Its top-level collections are packages, files, symbols, routes, dependency edges, diagnostics, ignored projects, reusable memory, and AI enrichment. Optional additions remain backward-compatible with older v2 snapshots.
+`RepositoryBrain` is versioned with `brainVersion: 2`. Its top-level collections are packages, files, symbols, routes, dependency edges, diagnostics, ignored projects, reusable memory, and AI enrichment. Reusable memory includes repository, package, module, route, dependency, test-strategy, entry-point, configuration, and documentation chunks. Optional additions remain backward-compatible with older v2 snapshots.
 
 Every route, package, and source file carries evidence containing a source path, explanation, and confidence. Repository Memory has its own `schemaVersion`. It contains stable, typed chunks (repository, package, module, route, dependency, and test strategy), each with source paths, a source fingerprint, evidence, confidence, and lifecycle timestamps. On refresh, a matching ID and source fingerprint reuses the exact existing chunk; changed evidence updates only that chunk, and missing evidence removes its chunk.
 

@@ -33,7 +33,7 @@ Compylar must reduce repeated repository discovery without becoming an untrusted
 
 ## Memory quality
 
-- [ ] Track entry points, configuration, documentation, and test strategy as richer first-class chunks.
+- [x] Track entry points, configuration, documentation, and test strategy as richer first-class chunks.
 - [ ] Invalidate direct dependents when an exported source contract changes.
 - [ ] Record explicit unknowns and confidence changes as queryable memory.
 - [ ] Add chunk-level history and explain why a chunk was updated, reused, or removed.
@@ -50,7 +50,7 @@ Compylar must reduce repeated repository discovery without becoming an untrusted
 
 ## Analysis depth
 
-- [ ] Add entry-point and configuration inventory extraction.
+- [x] Add entry-point and configuration inventory extraction.
 - [ ] Support exports/re-exports, cross-package imports, and more package managers.
 - [ ] Add framework adapters through isolated, tested modules.
 - [ ] Add data-flow and API-contract facts where deterministic evidence exists.

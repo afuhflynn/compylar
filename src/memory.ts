@@ -108,6 +108,37 @@ function deriveChunks(brain: RepositoryBrain): DraftChunk[] {
       }),
     );
   }
+  const tracked = brain.trackedFiles ?? [];
+  for (const file of tracked.filter((item) => /(?:^|\/)(?:package\.json|tsconfig(?:\.[^/]+)?\.json|vite\.config\.|next\.config\.|eslint|prettier|vitest\.config\.|pnpm-workspace\.yaml)/.test(item.path))) {
+    chunks.push(draft(brain, {
+      id: `configuration:${file.path}`,
+      kind: "configuration",
+      title: file.path,
+      summary: "Repository configuration tracked for freshness and reproducible behavior.",
+      sourcePaths: [file.path],
+      evidence: [{ source: file.path, detail: "tracked configuration file", confidence: "high" }],
+    }));
+  }
+  for (const file of tracked.filter((item) => /(?:^|\/)(?:README|CONTRIBUTING|ARCHITECTURE|RULES|AGENTS)\.md$/i.test(item.path))) {
+    chunks.push(draft(brain, {
+      id: `documentation:${file.path}`,
+      kind: "documentation",
+      title: file.path,
+      summary: "Repository documentation tracked as durable engineering context.",
+      sourcePaths: [file.path],
+      evidence: [{ source: file.path, detail: "tracked repository documentation", confidence: "high" }],
+    }));
+  }
+  for (const file of brain.files.filter((item) => /(?:^|\/)(?:index|main|cli)\.[cm]?[jt]sx?$/.test(item.path))) {
+    chunks.push(draft(brain, {
+      id: `entry-point:${file.path}`,
+      kind: "entry-point",
+      title: file.path,
+      summary: `Potential source entry point; exports: ${file.exports.join(", ") || "none"}.`,
+      sourcePaths: [file.path],
+      evidence: file.evidence,
+    }));
+  }
   const testFiles = brain.files.filter((file) => /(?:^|\/)(?:test|tests)\/|\.(?:test|spec)\.[cm]?[jt]sx?$/.test(file.path));
   if (testFiles.length) {
     chunks.push(
