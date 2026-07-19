@@ -1,0 +1,5 @@
+{
+  "name": "workspace-demo-web",
+  "private": true,
+  "dependencies": { "next": "15.3.0" }
+}

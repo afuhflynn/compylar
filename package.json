@@ -1,0 +1,45 @@
+{
+  "name": "compylar",
+  "version": "0.1.0",
+  "packageManager": "pnpm@11.9.0",
+  "description": "Compylar is a local Knowledge Compiler for AI coding agents. It analyzes a TypeScript or JavaScript repository, records evidence-backed repository facts, and creates task-specific context packs that an agent can use without rediscovering the whole codebase.",
+  "engines": {
+    "node": ">=22.5.0"
+  },
+  "type": "module",
+  "bin": {
+    "compylar": "./dist/cli.js"
+  },
+  "files": [
+    "dist",
+    "skills",
+    "AGENTS.md",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "node scripts/clean-dist.mjs && tsc -p tsconfig.json && node scripts/make-cli-executable.mjs && node scripts/verify-cli-bin.mjs",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run",
+    "demo": "pnpm build && node scripts/demo.mjs",
+    "benchmark": "pnpm build && node scripts/benchmark.mjs",
+    "first-run": "pnpm build && node scripts/first-run.mjs",
+    "verify:cli-bin": "node scripts/verify-cli-bin.mjs"
+  },
+  "dependencies": {
+    "chalk": "^5.6.2",
+    "cli-table3": "^0.6.5",
+    "commander": "^13.1.0",
+    "fast-glob": "^3.3.3",
+    "openai": "^5.23.2",
+    "ora": "^9.4.1",
+    "ts-morph": "^26.0.0",
+    "zod": "^3.25.76"
+  },
+  "devDependencies": {
+    "@types/node": "^22.20.1",
+    "tsx": "^4.23.1",
+    "typescript": "^5.9.3",
+    "vitest": "^3.2.7"
+  }
+}

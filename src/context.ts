@@ -1,0 +1,284 @@
+import { ContextClarification, ContextPack, ContextResult, RepositoryBrain } from "./types.js";
+
+const STOPWORDS = new Set([
+  "a", "an", "and", "are", "as", "at", "for", "from", "in", "into",
+  "is", "of", "on", "or", "the", "to", "with", "does", "do", "how",
+]);
+const AMBIGUOUS_TERMS = new Set([
+  "what", "happening", "happen", "going", "on", "status", "thing", "things",
+  "stuff", "something", "overview", "everything",
+]);
+const IMPLEMENTATION_TERMS = new Set([
+  "add", "build", "change", "create", "implement", "modify", "refactor", "remove", "update",
+]);
+const DEBUGGING_TERMS = new Set([
+  "broken", "bug", "crash", "debug", "error", "fail", "fix", "issue", "loading", "slow", "timeout", "why",
+]);
+const EXPLANATION_TERMS = new Set([
+  "describe", "explain", "flow", "understand", "where", "work", "works",
+]);
+const SYNONYMS: Record<string, string[]> = {
+  auth: ["authentication", "authorization", "login", "signin", "sign-in"],
+  authentication: ["auth", "authorization", "login", "signin", "sign-in"],
+  login: ["auth", "authentication", "signin", "sign-in"],
+  dashboard: ["home", "overview"],
+  loading: ["pending", "spinner", "fetch", "fetching"],
+};
+
+export type ContextIntent = ContextPack["intent"] | "ambiguous";
+
+const tokenize = (task: string) =>
+  task
+    .toLowerCase()
+    .split(/[^a-z0-9-]+/)
+    .map((term) => term.replace(/^-+|-+$/g, ""))
+    .filter((term) => term.length > 2 && !STOPWORDS.has(term));
+
+function candidateAreas(brain: RepositoryBrain): string[] {
+  const areas = new Set<string>();
+  const genericAreas = new Set(["app", "pages", "lib", "components", "ui", "actions", "utils", "hooks"]);
+  for (const route of brain.routes) {
+    const segment = route.path.split("/").filter(Boolean)[0];
+    if (segment && !genericAreas.has(segment)) areas.add(segment.replace(/^\((.*)\)$/, "$1"));
+  }
+  for (const file of brain.files) {
+    const parts = file.path.split("/");
+    const appIndex = Math.max(parts.indexOf("app"), parts.indexOf("pages"));
+    const area = parts[appIndex + 1];
+    if (area && !area.includes(".") && !genericAreas.has(area)) areas.add(area.replace(/^\((.*)\)$/, "$1"));
+  }
+  return [...areas].sort().slice(0, 12);
+}
+
+function classify(task: string, terms: string[]): { intent: ContextIntent; ambiguous: boolean } {
+  const lower = task.toLowerCase();
+  const hasConcreteTerm = terms.some((term) => !AMBIGUOUS_TERMS.has(term));
+  if (!hasConcreteTerm || terms.length === 0 || /^(what|how|why)\s+(is|are|does|do)?\s*(this|that|it|happening|going on)?\s*\??$/i.test(lower.trim())) {
+    return { intent: "ambiguous", ambiguous: true };
+  }
+  if (terms.some((term) => IMPLEMENTATION_TERMS.has(term))) {
+    return { intent: "implementation", ambiguous: false };
+  }
+  if (terms.some((term) => DEBUGGING_TERMS.has(term))) {
+    return { intent: "debugging", ambiguous: false };
+  }
+  if (terms.some((term) => EXPLANATION_TERMS.has(term))) {
+    return { intent: "explanation", ambiguous: false };
+  }
+  return { intent: "overview", ambiguous: false };
+}
+
+function missingInformation(intent: ContextPack["intent"], terms: string[]): string[] {
+  if (intent === "debugging" && terms.length <= 3) {
+    return ["observed symptom", "expected behavior", "reproduction details"];
+  }
+  if (intent === "implementation" && terms.length <= 2) {
+    return ["desired behavior", "scope of the change", "acceptance criteria"];
+  }
+  return [];
+}
+
+function clarification(brain: RepositoryBrain, task: string): ContextClarification {
+  const areas = candidateAreas(brain);
+  return {
+    brainVersion: 2,
+    status: "needs-clarification",
+    intent: "ambiguous",
+    actionability: "ambiguous",
+    mutationAllowed: false,
+    task,
+    reason: "The request does not identify a feature, symptom, or repository area.",
+    missingInformation: ["target area", "observed behavior", "desired outcome"],
+    candidateAreas: areas,
+    suggestions: areas.slice(0, 3).map((area) => `explain the ${area} flow`),
+  };
+}
+
+function expandedTerms(terms: string[]): Set<string> {
+  return new Set(terms.flatMap((term) => [term, ...(SYNONYMS[term] ?? [])]));
+}
+
+function buildDeterministicContext(
+  brain: RepositoryBrain,
+  task: string,
+  intent: Exclude<ContextIntent, "ambiguous">,
+): ContextPack {
+  const terms = tokenize(task);
+  const searchableTerms = expandedTerms(terms);
+  const scored = brain.files.map((file) => {
+    const symbols = brain.symbols.filter((symbol) => symbol.file === file.path);
+    const route = brain.routes.find((item) => item.file === file.path);
+    const pathTokens = file.path.toLowerCase().split(/[^a-z0-9]+/).filter(Boolean);
+    const symbolTokens = symbols.flatMap((symbol) => [symbol.name.toLowerCase(), ...symbol.signature.toLowerCase().split(/[^a-z0-9]+/)]);
+    const haystackTokens = new Set([
+      ...pathTokens,
+      file.packageName.toLowerCase(),
+      ...file.imports.flatMap((value) => value.toLowerCase().split(/[^a-z0-9]+/)),
+      ...file.exports.flatMap((value) => value.toLowerCase().split(/[^a-z0-9]+/)),
+      ...symbolTokens,
+    ]);
+    const hits = [...searchableTerms].filter((term) => haystackTokens.has(term));
+    const exactPathHits = terms.filter((term) => pathTokens.includes(term));
+    const exactSymbolHits = terms.filter((term) => symbols.some((symbol) => symbol.name.toLowerCase() === term));
+    const routePathTokens = route?.path.toLowerCase().split(/[^a-z0-9]+/).filter(Boolean) ?? [];
+    const routeMatch = route && [...searchableTerms].some((term) => routePathTokens.includes(term));
+    const graphHits = brain.dependencyGraph.filter((edge) => edge.from === file.path || edge.to === file.path).length;
+    const score =
+      hits.length * 2 +
+      exactPathHits.length * 5 +
+      exactSymbolHits.length * 6 +
+      Math.min(graphHits, 3) +
+      (routeMatch ? 2 : 0);
+    return { file, symbols, route, routeMatch, score, hits, exactPathHits, exactSymbolHits };
+  }).sort((a, b) => b.score - a.score || a.file.path.localeCompare(b.file.path));
+  const selected = scored.filter((item) => item.score > 0).slice(0, 12);
+  const fallback = selected.length ? selected : scored.slice(0, Math.min(8, scored.length));
+  const relevantPackages = [...new Set(fallback.map((item) => item.file.packageName))];
+  const selectedPaths = new Set(fallback.map((item) => item.file.path));
+  const memoryChunks = (brain.memory?.chunks ?? [])
+    .filter(
+      (chunk) =>
+        chunk.kind === "repository" ||
+        chunk.sourcePaths.some((source) => selectedPaths.has(source)),
+    )
+    .slice(0, 12)
+    .map((chunk) => ({
+      id: chunk.id,
+      kind: chunk.kind,
+      title: chunk.title,
+      summary: chunk.summary,
+      sourcePaths: chunk.sourcePaths,
+      confidence: chunk.confidence,
+    }));
+  const missing = missingInformation(intent, terms);
+  const confidence = selected.length >= 3 ? "high" : selected.length ? "medium" : "low";
+
+  return {
+    brainVersion: 2,
+    status: "context-ready",
+    intent,
+    actionability: missing.length ? "underspecified" : "actionable",
+    mutationAllowed: false,
+    retrievalMode: "deterministic",
+    confidence,
+    task,
+    generatedAt: new Date().toISOString(),
+    taskSummary: `${intent === "debugging" ? "Investigate" : intent === "explanation" ? "Explain" : intent === "overview" ? "Describe" : "Plan"}: ${task}. Use verified evidence before proposing changes.`,
+    selectedFiles: fallback.map((item) => ({
+      path: item.file.path,
+      packageName: item.file.packageName,
+      score: item.score,
+      reason: [
+        item.exactPathHits.length ? `path match: ${item.exactPathHits.join(", ")}` : "",
+        item.exactSymbolHits.length ? `symbol match: ${item.exactSymbolHits.join(", ")}` : "",
+        item.hits.length ? `repository terms: ${item.hits.join(", ")}` : "",
+        item.routeMatch ? `route: ${item.route?.path}` : "",
+        !item.hits.length && !item.route ? "fallback high-signal file" : "",
+      ].filter(Boolean).join("; "),
+      symbols: item.symbols.map((symbol) => `${symbol.name} (${symbol.kind}, line ${symbol.line})`),
+      preview: item.file.preview,
+    })),
+    memoryChunks,
+    relevantPackages,
+    architectureNotes: [
+      brain.architectureSummary,
+      ...brain.packages.filter((pkg) => relevantPackages.includes(pkg.name)).map((pkg) => `${pkg.name}: ${pkg.framework}, ${pkg.fileCount} files, scripts: ${Object.keys(pkg.scripts).join(", ") || "none"}`),
+      ...(brain.ai.summary ? [`AI interpretation (non-authoritative): ${brain.ai.summary}`] : []),
+    ],
+    constraints: [
+      brain.routes.length ? `${brain.routes.length} verified routes exist; preserve their owning package boundaries.` : "No verified application routes were found in the analyzed scope.",
+      brain.diagnostics.length ? `${brain.diagnostics.length} diagnostics require review before relying on complete knowledge.` : "No parser diagnostics were recorded.",
+      "This context is read-only evidence; mutation requires separate harness authorization.",
+    ],
+    agentInstructions: [
+      "Reflect the request and ask for missing details before editing when actionability is underspecified.",
+      "Read the selected source before proposing changes.",
+      "Use the package, route, symbol, and dependency evidence to trace the task.",
+      "Treat deterministic facts as authoritative; call out assumptions before inventing missing behavior.",
+    ],
+    assumptions: [],
+    excludedContext: brain.files.filter((file) => !fallback.some((item) => item.file.path === file.path)).slice(0, 12).map((file) => file.path),
+    missingInformation: missing,
+    candidateAreas: candidateAreas(brain),
+    ai: { status: "not-requested" },
+  };
+}
+
+export function buildContext(brain: RepositoryBrain, task: string): ContextPack {
+  const terms = tokenize(task);
+  const classified = classify(task, terms);
+  if (classified.ambiguous) {
+    throw new Error("Context request needs clarification before retrieval.");
+  }
+  return buildDeterministicContext(brain, task, classified.intent as Exclude<ContextIntent, "ambiguous">);
+}
+
+export function buildContextResult(brain: RepositoryBrain, task: string): ContextResult {
+  const terms = tokenize(task);
+  const classified = classify(task, terms);
+  return classified.ambiguous
+    ? clarification(brain, task)
+    : buildDeterministicContext(brain, task, classified.intent as Exclude<ContextIntent, "ambiguous">);
+}
+
+export function contextMarkdown(pack: ContextPack) {
+  return [
+    `# Compylar Context Pack`,
+    ``,
+    `> Generated from Repository Brain v${pack.brainVersion} at ${pack.generatedAt}. Deterministic facts are authoritative; AI interpretation is labeled.`,
+    ``,
+    `## Request`,
+    pack.task,
+    ``,
+    `- Intent: ${pack.intent}`,
+    `- Actionability: ${pack.actionability}`,
+    `- Retrieval: ${pack.retrievalMode} (${pack.confidence} confidence)`,
+    `- Mutation allowed: no`,
+    ``,
+    `## Task summary`,
+    pack.taskSummary,
+    ``,
+    ...(pack.missingInformation.length ? ["## Missing information", ...pack.missingInformation.map((item) => `- ${item}`), ""] : []),
+    `## Relevant packages`,
+    ...pack.relevantPackages.map((pkg) => `- \`${pkg}\``),
+    ``,
+    `## Relevant files`,
+    ...pack.selectedFiles.flatMap((file) => [
+      `### \`${file.path}\``,
+      `Package: \`${file.packageName}\` · score: ${file.score} · ${file.reason}`,
+      file.symbols.length ? `Symbols: ${file.symbols.join(", ")}` : "Symbols: none extracted",
+      "",
+      "```typescript",
+      file.preview,
+      "```",
+      "",
+    ]),
+    ...(pack.memoryChunks.length ? [
+      `## Reusable memory`,
+      ...pack.memoryChunks.flatMap((chunk) => [
+        `### ${chunk.title}`,
+        `${chunk.kind} · ${chunk.confidence} confidence · sources: ${chunk.sourcePaths.map((source) => `\`${source}\``).join(", ")}`,
+        chunk.summary,
+        "",
+      ]),
+    ] : []),
+    `## Architecture notes`,
+    ...pack.architectureNotes.map((note) => `- ${note}`),
+    ``,
+    `## Constraints`,
+    ...pack.constraints.map((note) => `- ${note}`),
+    ``,
+    `## Agent instructions`,
+    ...pack.agentInstructions.map((note) => `- ${note}`),
+    ``,
+    `## AI interpretation`,
+    pack.ai.status === "completed" && pack.ai.interpretation ? pack.ai.interpretation : `- ${pack.ai.status}`,
+    ``,
+    `## Assumptions`,
+    ...(pack.assumptions.length ? pack.assumptions.map((note) => `- ${note}`) : ["- None recorded."]),
+    ``,
+    `## Excluded context`,
+    ...(pack.excludedContext.length ? pack.excludedContext.map((file) => `- \`${file}\``) : ["- None."]),
+    ``,
+  ].join("\n");
+}

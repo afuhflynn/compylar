@@ -1,0 +1,4 @@
+interface:
+  display_name: "Compylar Memory"
+  short_description: "Reuse verified repository memory"
+  default_prompt: "Use $compylar to understand this repository before making changes."
