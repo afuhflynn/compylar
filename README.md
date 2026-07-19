@@ -85,6 +85,15 @@ node dist/cli.js analytics .
 # Create context for a coding task
 node dist/cli.js context "add authentication to the dashboard" .
 
+# Look up a type or symbol without source previews
+node dist/cli.js memory SubmissionDetail .
+
+# List only verified routes matching a feature area
+node dist/cli.js routes . --filter challenges
+
+# Request bounded implementation excerpts only when needed
+node dist/cli.js context "fix dashboard loading" . --include-preview --budget 2000
+
 # Optional AI reranking of verified candidates
 node dist/cli.js context "explain the authentication flow" . --ai
 
@@ -131,7 +140,7 @@ Generated state lives in `.compylar/`:
 - `brain.md` — readable Brain report
 - `checkpoint.json` — resumable work from an interrupted compile
 
-Context output is printed or returned as JSON by default. Markdown context files are snapshots and are created only with `context --export`.
+Context output is metadata-first: selected paths, symbols and locations, evidence, memory facts, and excluded context. Raw source excerpts are omitted unless `context --include-preview` is requested. `--budget` defaults to 2,000 estimated tokens across the whole response and reports evidence omitted by the budget. Markdown context files are snapshots and are created only with `context --export`.
 
 Each Brain also contains compact reusable memory chunks for repository, package, module, route, dependency, and test-strategy facts. `refresh` reconciles chunks by stable ID and source fingerprint: only changed evidence creates a new chunk revision, while task context includes the chunks relevant to its selected source paths.
 

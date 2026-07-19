@@ -1,7 +1,7 @@
 import path from "node:path";
 import { compileRepository, discoverPackages } from "./analyzer.js";
 import { enrichContext } from "./ai.js";
-import { buildContextResult } from "./context.js";
+import { buildContextResult, type ContextOptions } from "./context.js";
 import { buildAnalytics } from "./analytics.js";
 import { loadBrain, saveBrain } from "./storage.js";
 import { loadConfig } from "./config.js";
@@ -17,8 +17,8 @@ export async function repositoryAnalytics(root: string) {
   return buildAnalytics(await repositoryBrain(root));
 }
 
-export async function repositoryContext(root: string, task: string, ai = false) {
-  const result = buildContextResult(await repositoryBrain(root), task);
+export async function repositoryContext(root: string, task: string, ai = false, options: ContextOptions = {}) {
+  const result = buildContextResult(await repositoryBrain(root), task, options);
   if (result.status === "needs-clarification" || !ai) return result;
   const config = await loadConfig(path.resolve(root));
   return enrichContext(result, { ...config.ai, mode: "optional" });
@@ -39,6 +39,79 @@ export async function repositoryMemory(
     schemaVersion: brain.memory?.schemaVersion ?? 1,
     baseline: brain.compiledAt,
     chunks: chunks.slice(0, 40),
+  };
+}
+
+export type RepositoryLookupMatch = {
+  kind: "symbol" | "memory" | "route";
+  match: "exact" | "partial";
+  name: string;
+  definition: string;
+  source: string;
+  line?: number;
+  confidence: "high" | "medium" | "low";
+};
+
+export type RepositoryLookup = {
+  query: string;
+  baseline: string;
+  matches: RepositoryLookupMatch[];
+};
+
+export async function repositoryLookup(
+  root: string,
+  query: string,
+  suppliedBrain?: RepositoryBrain,
+): Promise<RepositoryLookup> {
+  const brain = suppliedBrain ?? await repositoryBrain(root);
+  const needle = query.trim().toLowerCase();
+  const queryTerms = new Set(
+    query.replace(/([a-z0-9])([A-Z])/g, "$1 $2").toLowerCase().split(/[^a-z0-9]+/).filter((term) => term.length >= 3),
+  );
+  const overlapsQuery = (value: string) =>
+    value.toLowerCase().includes(needle) || value.replace(/([a-z0-9])([A-Z])/g, "$1 $2").toLowerCase().split(/[^a-z0-9]+/).some((term) => queryTerms.has(term));
+  const symbolMatches = brain.symbols
+    .filter((symbol) => overlapsQuery(symbol.name))
+    .map((symbol): RepositoryLookupMatch => ({
+      kind: "symbol",
+      match: symbol.name.toLowerCase() === needle ? "exact" : "partial",
+      name: symbol.name,
+      definition: symbol.signature,
+      source: symbol.file,
+      line: symbol.line,
+      confidence: "high",
+    }));
+  const memoryMatches = (brain.memory?.chunks ?? [])
+    .filter((chunk) => `${chunk.title} ${chunk.summary} ${chunk.sourcePaths.join(" ")}`.toLowerCase().includes(needle))
+    .map((chunk): RepositoryLookupMatch => ({
+      kind: "memory",
+      match: chunk.title.toLowerCase() === needle ? "exact" : "partial",
+      name: chunk.title,
+      definition: chunk.summary,
+      source: chunk.sourcePaths[0] ?? "<repository>",
+      line: chunk.evidence[0]?.line,
+      confidence: chunk.confidence,
+    }));
+  const routeMatches = brain.routes
+    .filter((route) => `${route.path} ${route.file}`.toLowerCase().includes(needle))
+    .map((route): RepositoryLookupMatch => ({
+      kind: "route",
+      match: route.path.toLowerCase() === needle ? "exact" : "partial",
+      name: route.path,
+      definition: `${route.kind} route${route.methods.length ? `; methods: ${route.methods.join(", ")}` : ""}`,
+      source: route.file,
+      line: route.evidence[0]?.line,
+      confidence: route.evidence[0]?.confidence ?? "medium",
+    }));
+  const rank = (item: RepositoryLookupMatch) =>
+    (item.match === "exact" ? 0 : 1) + (item.kind === "symbol" ? 0 : item.kind === "memory" ? 2 : 4);
+  const exactSymbols = symbolMatches.filter((match) => match.match === "exact");
+  return {
+    query,
+    baseline: brain.compiledAt,
+    matches: (exactSymbols.length ? exactSymbols : [...symbolMatches, ...memoryMatches, ...routeMatches])
+      .sort((left, right) => rank(left) - rank(right) || left.source.localeCompare(right.source) || left.name.localeCompare(right.name))
+      .slice(0, 40),
   };
 }
 
@@ -119,15 +192,19 @@ export async function repositoryRefresh(
   return { refreshed: true, before, after, brain };
 }
 
-export async function repositoryRoutes(root: string, filters: { area?: string; kind?: RepositoryBrain["routes"][number]["kind"]; query?: string } = {}) {
-  const brain = await repositoryBrain(root);
+export async function repositoryRoutes(
+  root: string,
+  filters: { area?: string; kind?: RepositoryBrain["routes"][number]["kind"]; query?: string; limit?: number } = {},
+  suppliedBrain?: RepositoryBrain,
+) {
+  const brain = suppliedBrain ?? await repositoryBrain(root);
   const query = filters.query?.toLowerCase();
   return brain.routes.filter((route) => {
     const area = route.path.split("/").filter(Boolean)[0] ?? "home";
     return (!filters.area || area === filters.area) &&
       (!filters.kind || route.kind === filters.kind) &&
       (!query || `${route.path} ${route.file} ${route.packageName}`.toLowerCase().includes(query));
-  });
+  }).slice(0, filters.limit ?? 100);
 }
 
 export async function repositoryDependencies(root: string, filters: { kind?: RepositoryBrain["dependencyGraph"][number]["kind"]; query?: string } = {}) {

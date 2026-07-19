@@ -204,7 +204,7 @@ export type ContextPack = {
     score: number;
     reason: string;
     symbols: string[];
-    preview: string;
+    preview?: string;
   }>;
   memoryChunks: Array<{
     id: string;
@@ -222,6 +222,12 @@ export type ContextPack = {
   excludedContext: string[];
   missingInformation: string[];
   candidateAreas: string[];
+  budget: {
+    limitTokens: number;
+    estimatedTokens: number;
+    includesPreviews: boolean;
+    excludedEvidence: Array<{ path: string; reason: "budget" | "preview-not-requested" }>;
+  };
   ai: {
     status: "not-requested" | "not-configured" | "completed" | "timed-out" | "failed" | "invalid";
     model?: string;

@@ -98,12 +98,29 @@ const brain: RepositoryBrain = {
 };
 
 describe("context builder", () => {
-  it("selects matching files and includes source evidence", () => {
+  it("returns metadata first and makes source previews opt-in", () => {
     const pack = buildContext(brain, "update dashboard authentication");
     expect(pack.selectedFiles[0].path).toBe("app/dashboard/page.tsx");
-    expect(contextMarkdown(pack)).toContain(
-      "export default function Dashboard",
-    );
+    expect(pack.selectedFiles[0].preview).toBeUndefined();
+    expect(contextMarkdown(pack)).not.toContain("export default function Dashboard");
+    expect(pack.budget).toMatchObject({ limitTokens: 2000, includesPreviews: false });
+
+    const withPreview = buildContext(brain, "update dashboard authentication", {
+      includePreview: true,
+      budgetTokens: 1000,
+    });
+    expect(withPreview.selectedFiles[0].preview).toContain("export default function Dashboard");
+    expect(withPreview.budget).toMatchObject({ limitTokens: 1000, includesPreviews: true });
+
+    const capped = buildContext(brain, "update dashboard authentication", {
+      includePreview: true,
+      budgetTokens: 100,
+    });
+    expect(capped.selectedFiles[0].preview).toBeUndefined();
+    expect(capped.budget.excludedEvidence).toContainEqual({
+      path: "app/dashboard/page.tsx",
+      reason: "budget",
+    });
   });
 });
 describe("context ranking", () => {

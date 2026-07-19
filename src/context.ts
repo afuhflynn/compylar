@@ -26,6 +26,12 @@ const SYNONYMS: Record<string, string[]> = {
 };
 
 export type ContextIntent = ContextPack["intent"] | "ambiguous";
+export type ContextOptions = {
+  includePreview?: boolean;
+  budgetTokens?: number;
+};
+const DEFAULT_CONTEXT_BUDGET_TOKENS = 2000;
+const estimatedTokens = (value: unknown) => Math.ceil(Buffer.byteLength(JSON.stringify(value), "utf8") / 4);
 
 const tokenize = (task: string) =>
   task
@@ -102,7 +108,10 @@ function buildDeterministicContext(
   brain: RepositoryBrain,
   task: string,
   intent: Exclude<ContextIntent, "ambiguous">,
+  options: ContextOptions = {},
 ): ContextPack {
+  const budgetTokens = options.budgetTokens ?? DEFAULT_CONTEXT_BUDGET_TOKENS;
+  const includePreview = options.includePreview === true;
   const terms = tokenize(task);
   const searchableTerms = expandedTerms(terms);
   const scored = brain.files.map((file) => {
@@ -153,7 +162,20 @@ function buildDeterministicContext(
   const missing = missingInformation(intent, terms);
   const confidence = selected.length >= 3 ? "high" : selected.length ? "medium" : "low";
 
-  return {
+  const selectedFiles: ContextPack["selectedFiles"] = fallback.map((item) => ({
+    path: item.file.path,
+    packageName: item.file.packageName,
+    score: item.score,
+    reason: [
+      item.exactPathHits.length ? `path match: ${item.exactPathHits.join(", ")}` : "",
+      item.exactSymbolHits.length ? `symbol match: ${item.exactSymbolHits.join(", ")}` : "",
+      item.hits.length ? `repository terms: ${item.hits.join(", ")}` : "",
+      item.routeMatch ? `route: ${item.route?.path}` : "",
+      !item.hits.length && !item.route ? "fallback high-signal file" : "",
+    ].filter(Boolean).join("; "),
+    symbols: item.symbols.map((symbol) => `${symbol.name} (${symbol.kind}, line ${symbol.line})`),
+  }));
+  const base: Omit<ContextPack, "budget"> = {
     brainVersion: 2,
     status: "context-ready",
     intent,
@@ -164,20 +186,7 @@ function buildDeterministicContext(
     task,
     generatedAt: new Date().toISOString(),
     taskSummary: `${intent === "debugging" ? "Investigate" : intent === "explanation" ? "Explain" : intent === "overview" ? "Describe" : "Plan"}: ${task}. Use verified evidence before proposing changes.`,
-    selectedFiles: fallback.map((item) => ({
-      path: item.file.path,
-      packageName: item.file.packageName,
-      score: item.score,
-      reason: [
-        item.exactPathHits.length ? `path match: ${item.exactPathHits.join(", ")}` : "",
-        item.exactSymbolHits.length ? `symbol match: ${item.exactSymbolHits.join(", ")}` : "",
-        item.hits.length ? `repository terms: ${item.hits.join(", ")}` : "",
-        item.routeMatch ? `route: ${item.route?.path}` : "",
-        !item.hits.length && !item.route ? "fallback high-signal file" : "",
-      ].filter(Boolean).join("; "),
-      symbols: item.symbols.map((symbol) => `${symbol.name} (${symbol.kind}, line ${symbol.line})`),
-      preview: item.file.preview,
-    })),
+    selectedFiles,
     memoryChunks,
     relevantPackages,
     architectureNotes: [
@@ -202,23 +211,77 @@ function buildDeterministicContext(
     candidateAreas: candidateAreas(brain),
     ai: { status: "not-requested" },
   };
+  const excludedEvidence: ContextPack["budget"]["excludedEvidence"] = [];
+  const pack = (): ContextPack => ({
+    ...base,
+    budget: {
+      limitTokens: budgetTokens,
+      estimatedTokens: 0,
+      includesPreviews: includePreview,
+      excludedEvidence,
+    },
+  });
+  const measure = () => estimatedTokens(pack());
+  while (measure() > budgetTokens && selectedFiles.length > 1) {
+    const removed = selectedFiles.pop()!;
+    excludedEvidence.push({ path: removed.path, reason: "budget" });
+  }
+  if (!includePreview) {
+    for (const file of selectedFiles) excludedEvidence.push({ path: file.path, reason: "preview-not-requested" });
+  } else {
+    for (const file of selectedFiles) {
+      const preview = fallback.find((item) => item.file.path === file.path)?.file.preview ?? "";
+      if (!preview || measure() >= budgetTokens) {
+        excludedEvidence.push({ path: file.path, reason: "budget" });
+        continue;
+      }
+      let lower = 0;
+      let upper = preview.length;
+      while (lower < upper) {
+        const length = Math.ceil((lower + upper) / 2);
+        file.preview = preview.slice(0, length);
+        if (measure() <= budgetTokens) lower = length;
+        else upper = length - 1;
+      }
+      file.preview = preview.slice(0, lower);
+      if (lower < preview.length) excludedEvidence.push({ path: file.path, reason: "budget" });
+      if (!lower) delete file.preview;
+    }
+  }
+  let result = pack();
+  while (estimatedTokens(result) > budgetTokens) {
+    const previewFile = [...selectedFiles].reverse().find((file) => file.preview);
+    if (previewFile?.preview) {
+      const excessCharacters = (estimatedTokens(result) - budgetTokens) * 4;
+      previewFile.preview = previewFile.preview.slice(0, Math.max(0, previewFile.preview.length - excessCharacters));
+      if (!previewFile.preview) delete previewFile.preview;
+      result = pack();
+      continue;
+    }
+    if (selectedFiles.length <= 1) break;
+    const removed = selectedFiles.pop()!;
+    excludedEvidence.push({ path: removed.path, reason: "budget" });
+    result = pack();
+  }
+  result.budget.estimatedTokens = estimatedTokens(result);
+  return result;
 }
 
-export function buildContext(brain: RepositoryBrain, task: string): ContextPack {
+export function buildContext(brain: RepositoryBrain, task: string, options: ContextOptions = {}): ContextPack {
   const terms = tokenize(task);
   const classified = classify(task, terms);
   if (classified.ambiguous) {
     throw new Error("Context request needs clarification before retrieval.");
   }
-  return buildDeterministicContext(brain, task, classified.intent as Exclude<ContextIntent, "ambiguous">);
+  return buildDeterministicContext(brain, task, classified.intent as Exclude<ContextIntent, "ambiguous">, options);
 }
 
-export function buildContextResult(brain: RepositoryBrain, task: string): ContextResult {
+export function buildContextResult(brain: RepositoryBrain, task: string, options: ContextOptions = {}): ContextResult {
   const terms = tokenize(task);
   const classified = classify(task, terms);
   return classified.ambiguous
     ? clarification(brain, task)
-    : buildDeterministicContext(brain, task, classified.intent as Exclude<ContextIntent, "ambiguous">);
+    : buildDeterministicContext(brain, task, classified.intent as Exclude<ContextIntent, "ambiguous">, options);
 }
 
 export function contextMarkdown(pack: ContextPack) {
@@ -248,9 +311,7 @@ export function contextMarkdown(pack: ContextPack) {
       `Package: \`${file.packageName}\` · score: ${file.score} · ${file.reason}`,
       file.symbols.length ? `Symbols: ${file.symbols.join(", ")}` : "Symbols: none extracted",
       "",
-      "```typescript",
-      file.preview,
-      "```",
+      ...(file.preview ? ["```typescript", file.preview, "```"] : ["Preview: not included; request --include-preview when implementation detail is needed."]),
       "",
     ]),
     ...(pack.memoryChunks.length ? [
@@ -279,6 +340,10 @@ export function contextMarkdown(pack: ContextPack) {
     ``,
     `## Excluded context`,
     ...(pack.excludedContext.length ? pack.excludedContext.map((file) => `- \`${file}\``) : ["- None."]),
+    ``,
+    `## Request budget`,
+    `- ${pack.budget.estimatedTokens}/${pack.budget.limitTokens} estimated tokens · previews ${pack.budget.includesPreviews ? "requested" : "not requested"}`,
+    ...(pack.budget.excludedEvidence.length ? pack.budget.excludedEvidence.map((item) => `- \`${item.path}\`: ${item.reason}`) : ["- No evidence omitted by the request budget."]),
     ``,
   ].join("\n");
 }

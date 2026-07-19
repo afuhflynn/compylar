@@ -22,7 +22,7 @@ import {
   memoryRefreshSummary,
 } from "./analytics.js";
 import { createProgressController, type ProgressMode } from "./progress.js";
-import { repositoryRefresh, repositoryStatus } from "./services.js";
+import { repositoryLookup, repositoryRefresh, repositoryRoutes, repositoryStatus } from "./services.js";
 import { runMcpServer } from "./mcp.js";
 import { COMPYLAR_VERSION } from "./version.js";
 import { loadConfig } from "./config.js";
@@ -284,6 +284,57 @@ outputOptions(
 });
 outputOptions(
   program
+    .command("memory")
+    .description("Look up compact, evidence-backed repository facts")
+    .argument("<query>", "symbol, route, module, or memory query")
+    .argument("[path]", "repository path", "."),
+).action(async (query, value, options) => {
+  const result = await repositoryLookup(rootOf(value), query);
+  print(result, options.json, () => {
+    if (!result.matches.length) {
+      console.log(`No evidence-backed memory matched ${JSON.stringify(query)}.`);
+      return;
+    }
+    for (const match of result.matches) {
+      console.log(`${match.kind} · ${match.match} · ${match.name}`);
+      console.log(`  ${match.definition}`);
+      console.log(`  ${match.source}${match.line ? `:${match.line}` : ""} · ${match.confidence} confidence`);
+    }
+  });
+});
+outputOptions(
+  program
+    .command("routes")
+    .description("List verified routes without reopening source files")
+    .argument("[path]", "repository path", ".")
+    .option("--filter <text>", "match route path, file, or package")
+    .option("--area <area>", "match the top-level route area")
+    .option("--kind <kind>", "route kind: page, layout, or api")
+    .option("--limit <number>", "maximum routes to return", "100"),
+).action(async (value, options) => {
+  if (options.kind && !["page", "layout", "api"].includes(options.kind)) {
+    throw new Error("Route kind must be one of: page, layout, api.");
+  }
+  const limit = Number(options.limit);
+  if (!Number.isInteger(limit) || limit <= 0) throw new Error("Route limit must be a positive integer.");
+  const routes = await repositoryRoutes(rootOf(value), {
+    query: options.filter,
+    area: options.area,
+    kind: options.kind,
+    limit,
+  });
+  print(routes, options.json, () => {
+    if (!routes.length) {
+      console.log("No verified routes matched.");
+      return;
+    }
+    for (const route of routes) {
+      console.log(`${route.kind.padEnd(6)} ${route.path}  ${route.file}`);
+    }
+  });
+});
+outputOptions(
+  program
     .command("context")
     .description("Create agent-ready task context from the latest brain")
     .argument("<task>", "natural-language task")
@@ -295,10 +346,19 @@ outputOptions(
     .option(
       "--export [path]",
       "explicitly export the context Markdown snapshot",
-    ),
+    )
+    .option("--include-preview", "include bounded source excerpts for implementation detail")
+    .option("--budget <tokens>", "maximum estimated context tokens", "2000"),
 ).action(async (task, value, options) => {
   const root = rootOf(value);
-  const result = buildContextResult(await loadBrain(root), task);
+  const budgetTokens = Number(options.budget);
+  if (!Number.isInteger(budgetTokens) || budgetTokens <= 0) {
+    throw new Error("Context budget must be a positive integer.");
+  }
+  const result = buildContextResult(await loadBrain(root), task, {
+    includePreview: options.includePreview === true,
+    budgetTokens,
+  });
   if (result.status === "needs-clarification") {
     if (options.json) console.log(JSON.stringify(result, null, 2));
     else {

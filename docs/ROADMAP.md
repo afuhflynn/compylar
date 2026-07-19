@@ -37,7 +37,7 @@ Compylar must reduce repeated repository discovery without becoming an untrusted
 - [ ] Invalidate direct dependents when an exported source contract changes.
 - [ ] Record explicit unknowns and confidence changes as queryable memory.
 - [ ] Add chunk-level history and explain why a chunk was updated, reused, or removed.
-- [ ] Add a compact `memory` CLI report for human inspection.
+- [x] Add a compact `memory` CLI report for human inspection.
 
 ## Agent interoperability
 
@@ -46,7 +46,7 @@ Compylar must reduce repeated repository discovery without becoming an untrusted
 - [x] Add tested adapters for supported agent configuration locations.
 - [x] Add an installer dry-run and rollback-safe write plan.
 - [x] Add MCP protocol health checks and actionable diagnostics.
-- [ ] Add a request budget to context retrieval and report excluded evidence.
+- [x] Add a request budget to context retrieval and report excluded evidence.
 
 ## Analysis depth
 

@@ -38,6 +38,8 @@ const toolDefinitions = [
       properties: {
         task: { type: "string", description: "The user's repository task or question." },
         ai: { type: "boolean", description: "Opt into evidence-constrained AI reranking." },
+        includePreview: { type: "boolean", description: "Include bounded source excerpts; disabled by default." },
+        budget: { type: "integer", minimum: 1, description: "Maximum estimated context tokens; defaults to 2000." },
         repository: { type: "string" },
       },
     },
@@ -120,7 +122,12 @@ async function callTool(name: string, args: Record<string, unknown>, configuredR
       return repositoryAnalytics(root);
     case "compylar_context": {
       if (typeof args.task !== "string" || !args.task.trim()) throw new Error("compylar_context requires a non-empty task");
-      return repositoryContext(root, args.task, args.ai === true);
+      return repositoryContext(root, args.task, args.ai === true, {
+        includePreview: args.includePreview === true,
+        budgetTokens: typeof args.budget === "number" && Number.isInteger(args.budget) && args.budget > 0
+          ? args.budget
+          : undefined,
+      });
     }
     case "compylar_memory":
       return repositoryMemory(root, {
