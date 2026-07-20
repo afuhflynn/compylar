@@ -2,7 +2,7 @@ import { ContextClarification, ContextPack, ContextResult, RepositoryBrain } fro
 
 const STOPWORDS = new Set([
   "a", "an", "and", "are", "as", "at", "for", "from", "in", "into",
-  "is", "of", "on", "or", "the", "to", "with", "does", "do", "how",
+  "is", "of", "on", "or", "the", "to", "with", "does", "do", "how", "work", "works",
 ]);
 const AMBIGUOUS_TERMS = new Set([
   "what", "happening", "happen", "going", "on", "status", "thing", "things",
@@ -35,6 +35,7 @@ const estimatedTokens = (value: unknown) => Math.ceil(Buffer.byteLength(JSON.str
 
 const tokenize = (task: string) =>
   task
+    .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
     .toLowerCase()
     .split(/[^a-z0-9-]+/)
     .map((term) => term.replace(/^-+|-+$/g, ""))
@@ -104,6 +105,26 @@ function expandedTerms(terms: string[]): Set<string> {
   return new Set(terms.flatMap((term) => [term, ...(SYNONYMS[term] ?? [])]));
 }
 
+const codeTokens = (value: string) => tokenize(value).filter((term) => !STOPWORDS.has(term));
+
+function expandSystem(brain: RepositoryBrain, seeds: string[], maxDepth = 3) {
+  const visited = new Set(seeds);
+  let frontier = [...seeds];
+  for (let depth = 0; depth < maxDepth && frontier.length; depth += 1) {
+    const next: string[] = [];
+    for (const edge of brain.dependencyGraph.filter((item) => item.kind === "internal")) {
+      if (frontier.includes(edge.from) && !visited.has(edge.to)) { visited.add(edge.to); next.push(edge.to); }
+      if (frontier.includes(edge.to) && !visited.has(edge.from)) { visited.add(edge.from); next.push(edge.from); }
+    }
+    frontier = next;
+  }
+  const files = [...visited].filter((file) => brain.files.some((item) => item.path === file));
+  const relationships = brain.dependencyGraph
+    .filter((edge) => edge.kind === "internal" && visited.has(edge.from) && visited.has(edge.to))
+    .map((edge) => ({ from: edge.from, to: edge.to, kind: edge.kind }));
+  return { files, relationships };
+}
+
 function buildDeterministicContext(
   brain: RepositoryBrain,
   task: string,
@@ -118,7 +139,7 @@ function buildDeterministicContext(
     const symbols = brain.symbols.filter((symbol) => symbol.file === file.path);
     const route = brain.routes.find((item) => item.file === file.path);
     const pathTokens = file.path.toLowerCase().split(/[^a-z0-9]+/).filter(Boolean);
-    const symbolTokens = symbols.flatMap((symbol) => [symbol.name.toLowerCase(), ...symbol.signature.toLowerCase().split(/[^a-z0-9]+/)]);
+    const symbolTokens = symbols.flatMap((symbol) => codeTokens(`${symbol.name} ${symbol.signature}`));
     const haystackTokens = new Set([
       ...pathTokens,
       file.packageName.toLowerCase(),
@@ -140,8 +161,12 @@ function buildDeterministicContext(
       (routeMatch ? 2 : 0);
     return { file, symbols, route, routeMatch, score, hits, exactPathHits, exactSymbolHits };
   }).sort((a, b) => b.score - a.score || a.file.path.localeCompare(b.file.path));
-  const selected = scored.filter((item) => item.score > 0).slice(0, 12);
-  const fallback = selected.length ? selected : scored.slice(0, Math.min(8, scored.length));
+  const selected = scored.filter((item) => item.score > 0).slice(0, 4);
+  const expanded = selected.length ? expandSystem(brain, selected.map((item) => item.file.path)) : { files: [], relationships: [] };
+  const byPath = new Map(scored.map((item) => [item.file.path, item]));
+  const fallback = selected.length
+    ? [...selected, ...expanded.files.filter((file) => !selected.some((item) => item.file.path === file)).map((file) => byPath.get(file)).filter((item): item is typeof scored[number] => Boolean(item))].slice(0, 12)
+    : scored.slice(0, Math.min(8, scored.length));
   const relevantPackages = [...new Set(fallback.map((item) => item.file.packageName))];
   const selectedPaths = new Set(fallback.map((item) => item.file.path));
   const memoryChunks = (brain.memory?.chunks ?? [])
@@ -160,7 +185,13 @@ function buildDeterministicContext(
       confidence: chunk.confidence,
     }));
   const missing = missingInformation(intent, terms);
-  const confidence = selected.length >= 3 ? "high" : selected.length ? "medium" : "low";
+  const confidence = expanded.files.length >= 3 ? "high" : selected.length ? "medium" : "low";
+  const systemTerms = terms.filter((term) => ![...IMPLEMENTATION_TERMS, ...DEBUGGING_TERMS, ...EXPLANATION_TERMS].includes(term));
+  const systems: ContextPack["systems"] = expanded.files.length >= 2 ? [{
+    name: systemTerms.slice(0, 3).join(" ") || "related repository system",
+    files: expanded.files,
+    relationships: expanded.relationships,
+  }] : [];
 
   const selectedFiles: ContextPack["selectedFiles"] = fallback.map((item) => ({
     path: item.file.path,
@@ -209,6 +240,11 @@ function buildDeterministicContext(
     excludedContext: brain.files.filter((file) => !fallback.some((item) => item.file.path === file.path)).slice(0, 12).map((file) => file.path),
     missingInformation: missing,
     candidateAreas: candidateAreas(brain),
+    systems,
+    coverage: {
+      decision: systems.length || selected.length >= 2 ? "memory-sufficient" : selected.length ? "targeted-read-required" : "insufficient-index",
+      unresolved: systems.length ? [] : ["No connected system could be proven from current repository facts."],
+    },
     ai: { status: "not-requested" },
   };
   const excludedEvidence: ContextPack["budget"]["excludedEvidence"] = [];
@@ -301,6 +337,19 @@ export function contextMarkdown(pack: ContextPack) {
     `## Task summary`,
     pack.taskSummary,
     ``,
+    `## Memory coverage`,
+    `- ${pack.coverage.decision}`,
+    ...pack.coverage.unresolved.map((item) => `- ${item}`),
+    ``,
+    ...(pack.systems.length ? [
+      `## Retrieved systems`,
+      ...pack.systems.flatMap((system) => [
+        `### ${system.name}`,
+        `Files: ${system.files.map((file) => `\`${file}\``).join(", ")}`,
+        ...system.relationships.map((edge) => `- ${edge.from} → ${edge.to} (${edge.kind})`),
+        ``,
+      ]),
+    ] : []),
     ...(pack.missingInformation.length ? ["## Missing information", ...pack.missingInformation.map((item) => `- ${item}`), ""] : []),
     `## Relevant packages`,
     ...pack.relevantPackages.map((pkg) => `- \`${pkg}\``),

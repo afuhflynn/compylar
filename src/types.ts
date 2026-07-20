@@ -222,6 +222,15 @@ export type ContextPack = {
   excludedContext: string[];
   missingInformation: string[];
   candidateAreas: string[];
+  systems: Array<{
+    name: string;
+    files: string[];
+    relationships: Array<{ from: string; to: string; kind: string }>;
+  }>;
+  coverage: {
+    decision: "memory-sufficient" | "targeted-read-required" | "insufficient-index";
+    unresolved: string[];
+  };
   budget: {
     limitTokens: number;
     estimatedTokens: number;

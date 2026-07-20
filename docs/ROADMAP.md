@@ -50,6 +50,7 @@ Compylar must reduce repeated repository discovery without becoming an untrusted
 
 ## Analysis depth
 
+- [x] Add deterministic system retrieval through code-aware lexical matching and bounded internal dependency expansion.
 - [x] Add entry-point and configuration inventory extraction.
 - [ ] Support exports/re-exports, cross-package imports, and more package managers.
 - [ ] Add framework adapters through isolated, tested modules.

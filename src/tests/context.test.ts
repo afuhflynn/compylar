@@ -159,4 +159,40 @@ describe("context ranking", () => {
       expect(result.selectedFiles[0].reason).toContain("path match");
     }
   });
+
+  it("retrieves a connected submission system instead of isolated keyword files", () => {
+    const flowBrain: RepositoryBrain = {
+      ...brain,
+      files: [
+        ...brain.files,
+        ...["app/api/challenges/[slug]/submit/route.ts", "lib/submissions/service.ts", "prisma/schema.prisma", "components/challenge/submit-button.tsx"].map((file) => ({
+          ...brain.files[0], path: file, preview: "", imports: [], exports: [],
+        })),
+      ],
+      symbols: [
+        ...brain.symbols,
+        { name: "submitChallenge", kind: "function", file: "app/api/challenges/[slug]/submit/route.ts", packageName: "demo", line: 1, exported: true, signature: "submitChallenge" },
+        { name: "createSubmission", kind: "function", file: "lib/submissions/service.ts", packageName: "demo", line: 1, exported: true, signature: "createSubmission" },
+        { name: "Submission", kind: "type", file: "prisma/schema.prisma", packageName: "demo", line: 1, exported: true, signature: "model Submission" },
+      ],
+      dependencyGraph: [
+        { from: "components/challenge/submit-button.tsx", to: "app/api/challenges/[slug]/submit/route.ts", kind: "internal", packageName: "demo", evidence: [] },
+        { from: "app/api/challenges/[slug]/submit/route.ts", to: "lib/submissions/service.ts", kind: "internal", packageName: "demo", evidence: [] },
+        { from: "lib/submissions/service.ts", to: "prisma/schema.prisma", kind: "internal", packageName: "demo", evidence: [] },
+      ],
+    };
+    const result = buildContext(flowBrain, "how does challenge submission work?");
+    expect(result.systems).toEqual([
+      expect.objectContaining({
+        name: "challenge submission",
+        files: expect.arrayContaining([
+          "components/challenge/submit-button.tsx",
+          "app/api/challenges/[slug]/submit/route.ts",
+          "lib/submissions/service.ts",
+          "prisma/schema.prisma",
+        ]),
+      }),
+    ]);
+    expect(result.coverage).toMatchObject({ decision: "memory-sufficient" });
+  });
 });

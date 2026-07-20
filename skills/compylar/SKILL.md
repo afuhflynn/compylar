@@ -14,7 +14,7 @@ Use the repository Brain as evidence-backed working memory. Do not treat it as p
 3. If stale, run `compylar refresh . --no-ai`. Do not answer from stale memory.
 4. For a named type, symbol, module, route, package, or dependency, use `compylar memory "<query>" .` first. With MCP available, `compylar_memory` is the equivalent read-only tool.
 5. For route inventory questions, use `compylar routes . --filter "<term>"`; do not glob route files when verified route memory is current.
-6. Retrieve `compylar_context` or run `compylar context "<task>" .` only for a concrete planning, implementation, or debugging task. Context is metadata-first; request `--include-preview` only when implementation detail is needed.
+6. Retrieve `compylar_context` or run `compylar context "<task>" .` only for a concrete planning, implementation, or debugging task. When coverage is `memory-sufficient`, answer from the returned system evidence before opening files. When it is `targeted-read-required`, read only the named unresolved evidence. Context is metadata-first; request `--include-preview` only when implementation detail is needed.
 
 ## Work with minimal context
 
