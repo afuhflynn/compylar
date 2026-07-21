@@ -1,268 +1,142 @@
 # Compylar
 
-Compylar is a local Knowledge Compiler for AI coding agents. It analyzes a TypeScript or JavaScript repository, records evidence-backed repository facts and learned discoveries, and creates task-specific context packs that an agent can use without rediscovering the whole codebase.
+Compylar is a local CLI for giving AI coding agents a durable, evidence-backed understanding of a repository. Instead of making the agent rediscover the same structure on every session, it builds a small repository brain that can be reused for future work.
 
-## What it guarantees
+This repository contains the implementation of that workflow: a compiler for repository facts, a local brain stored on disk, and a set of commands for status checks, task context, and refreshes.
 
-- Package boundaries are discovered before source files are analyzed.
-- Nested standalone projects are excluded unless explicitly compiled.
-- Routes are reported only when framework conventions and source evidence match.
-- Internal imports are resolved to real files when possible.
-- AI summaries are labeled as non-authoritative interpretations.
-- `status` compares the working tree with the last successful compile baseline.
-- Memory chunks have stable identities, source fingerprints, and evidence; unchanged chunks survive refreshes unchanged.
+## What it does
 
-## Built with Codex and GPT-5.6
+Compylar is designed around a simple idea:
 
-Compylar was built during OpenAI Build Week with Codex as the primary coding agent and GPT-5.6 for architecture review, implementation planning, debugging, and documentation refinement.
+- analyze a JavaScript or TypeScript repository
+- capture facts with source evidence
+- detect when that knowledge is stale
+- produce targeted context for a coding task
+- work with an agent without requiring a full repository re-scan every time
 
-Codex was used to inspect the repository, implement CLI workflows, improve the persistent-memory model, build the agent setup flow, create the packaged npm demo, remove unused MCP runtime code, and validate behavior with type checks, tests, builds, npm packaging checks, and end-to-end demo runs.
+The implementation is deterministic by default. It does not depend on an OpenAI key to compile facts or generate context.
 
-GPT-5.6 helped shape the product thesis: coding agents should rely on durable, evidence-backed repository memory instead of rediscovering the same codebase every session.
+## Quick start
 
-The core Compylar workflow remains deterministic and does not require an OpenAI API key.
+Compylar is published on npm, so you can run it directly with `npx` or install it globally.
 
-## First 60 seconds
+Check that the CLI works:
 
-Run the judge-ready demonstration directly from npm—no clone or build required:
+```bash
+npx -y compylar@0.1.1 --help
+```
+
+To use it in a real repository, install Compylar for the agent you want to work with:
+
+```bash
+cd /path/to/your-repository
+```
+
+For Codex:
+
+```bash
+npx -y compylar@0.1.1 setup-agent . --agent codex --scope project --apply
+```
+
+For Claude Code:
+
+```bash
+npx -y compylar@0.1.1 setup-agent . --agent claude --scope project --apply
+```
+
+For OpenCode:
+
+```bash
+npx -y compylar@0.1.1 setup-agent . --agent opencode --scope project --apply
+```
+
+This installs the Compylar skill and a short project instruction file so the agent knows to use repository memory before broad source-code reads.
+
+## Supported platforms
+
+Compylar runs locally through Node.js and npm:
+
+- Node.js 22.5+
+- macOS
+- Linux
+- Windows through npm launchers
+
+Agent setup currently supports:
+
+- Codex
+- Claude Code
+- OpenCode
+
+No OpenAI API key is required for the core workflow.
+
+## How to test with a coding agent
+
+After running `setup-agent`, start your coding agent inside the same repository.
+
+For Codex:
+
+```bash
+cd /path/to/your-repository
+codex
+```
+
+Then ask:
+
+```text
+Index this codebase
+```
+
+The first index can take some time. Compylar creates a deterministic repository brain, and the installed agent workflow guides the agent through a deeper source-cited codebase index and memory ingest.
+
+After indexing finishes, start a new agent session in the same repository and ask normal questions such as:
+
+1. What does this project do?
+2. How does authentication work?
+3. Explain the main architecture.
+
+Expected behavior: the agent should use Compylar memory first instead of grepping or reading broad sets of files just to rediscover foundational knowledge.
+
+Then try a real feature request:
+
+1. Add an activity timeline to the dashboard using the existing project patterns.
+
+Expected behavior: the agent should retrieve task-specific Compylar context, read only targeted files when necessary, implement the change, run validation, and update Compylar memory afterward so future sessions do not repeat the same discovery work.
+
+If you want to try the built-in demo instead of wiring up a real repository, run:
 
 ```bash
 npx -y compylar@0.1.1 demo
 ```
 
-To use Compylar in a repository, install the CLI once:
+## Core workflow
+
+The main flow is straightforward:
 
 ```bash
-pnpm install
-pnpm build
-npm link
+# compile repository facts into a local brain
+compylar compile .
+
+# inspect the current state
+compylar brain .
+
+# see whether the repository changed since the last compile
+compylar status .
+
+# create task-specific context for an agent
+compylar context "add authentication to the dashboard" .
 ```
 
-Then, in the repository you want an agent to understand:
+A few important details:
 
-```bash
-cd /path/to/your-repository
-compylar setup-agent . --agent codex --scope project --apply
-```
-
-Start Codex and give it a concrete task:
-
-> Add authentication to the dashboard. Use Compylar first: check freshness, retrieve task context, then read only the necessary source.
-
-No API key is required. On its first session the bundled skill makes the agent run: bootstrap/compile → deep `codebase-index` → validated semantic-memory ingest. Later sessions use: status → context/memory → targeted reads → tests → scoped refresh. Give initial compile/bootstrap/refresh at least 10 minutes of agent command time; retry with a larger allowance if interrupted.
-
-Compylar works alongside the coding agent: the agent performs the meaningful repository exploration, while Compylar preserves concise cited discoveries, detects staleness, and tells the next agent session exactly what must be revisited. Start an unfamiliar repository with `compylar bootstrap .`; use `compylar sync .` when memory is stale to distinguish structural re-indexing from a bounded delta update. After deep work, the agent runs `compylar memory-review` and commits a cited memory delta (or a cited dismissal), so architecture knowledge grows without relying on a user reminder.
-
-For users, this should be seamless: ask for normal engineering work. A correctly installed agent uses Compylar automatically; it does not wait for you to say “use memory,” “index this,” or “refresh the Brain.”
-
-For another agent, replace the installation command with one of these:
-
-```bash
-# Claude Code
-compylar setup-agent . --agent claude --scope project --apply
-
-# OpenCode
-compylar setup-agent . --agent opencode --scope project --apply
-```
-
-`setup-agent` is the recommended path: it installs both the detailed Compylar
-skill and the short always-on project instruction that makes agents load it for
-ordinary repository work. If the target instruction file already exists,
-Compylar refuses to overwrite it; merge the printed Compylar trigger into your
-existing project guidance.
-
-## First agent session
-
-You do not need to ask an agent to index, remember, or refresh the repository.
-After `setup-agent`, use normal prompts such as:
-
-> What does this repository do?
-
-> Implement two-factor authentication.
-
-> Investigate why challenge submissions fail.
-
-When no semantic Brain exists, the installed workflow automatically performs:
-
-```text
-deterministic bootstrap → bundled deep codebase index → cited manifest ingest
-```
-
-After deeper work, it performs a cited memory review and refreshes only the
-affected knowledge. The agent surfaces only material findings, genuine evidence
-gaps, or blockers.
+- `compile` creates the repository brain and stores it under `.compylar/`
+- `status` compares the current repository to the last successful baseline
+- `context` returns relevant evidence and metadata without flooding the agent with raw source
+- `refresh` and `sync` are used when the repository has changed and the stored knowledge needs to be updated
 
 ## Requirements
 
 - Node.js 22.5 or newer
 - pnpm
-
-## Build from source
-
-```bash
-pnpm install
-pnpm build
-```
-
-Source builds are for contributors. For a packaged end-to-end proof, run
-`npx -y compylar@0.1.1 demo` after the package is published.
-
-The build verifies that the generated CLI entrypoint is executable on POSIX systems. On Windows, npm provides the normal `.cmd` launcher instead; no Unix permission bit is required.
-
-## Basic workflow
-
-```bash
-# Initialize state
-node dist/cli.js init .
-
-# Analyze and create a successful baseline
-node dist/cli.js compile .
-
-# Read the facts and evidence summary
-node dist/cli.js brain .
-
-# Opt into detailed inventories when needed
-node dist/cli.js brain . --routes
-node dist/cli.js brain . --dependencies
-node dist/cli.js brain . --full
-
-# Display the detailed compile metrics
-node dist/cli.js analytics .
-
-# Answer a broad architecture question without selecting arbitrary files
-node dist/cli.js overview .
-
-# Establish the first local baseline and the agent's semantic-index checklist
-node dist/cli.js bootstrap .
-
-# After the bundled agent-led deep index creates CODEBASE_INDEX.md and its manifest,
-# validate and persist the cited semantic findings
-node dist/cli.js ingest-index .
-
-# Plan the smallest memory update after repository changes
-node dist/cli.js sync .
-
-# Create context for a coding task
-node dist/cli.js context "add authentication to the dashboard" .
-
-# Look up a type or symbol without source previews
-node dist/cli.js memory SubmissionDetail .
-
-# Preserve a verified discovery for the next agent session
-node dist/cli.js learn "Session guard redirects unauthenticated requests." . --kind flow --source lib/auth.ts:10-34
-
-# Required after targeted reads, debugging, refactoring, or validated implementation work
-node dist/cli.js memory-review "add dashboard authentication" . --files lib/auth.ts --changed app/dashboard/page.tsx --json
-# The agent writes the cited JSON delta, then Compylar validates and persists it
-node dist/cli.js commit-memory . --manifest .compylar/memory-delta.json
-
-# Retrieve architecture-grade memory by system in later sessions
-node dist/cli.js systems . --query authentication
-
-# List only verified routes matching a feature area
-node dist/cli.js routes . --filter challenges
-
-# Request bounded implementation excerpts only when needed
-node dist/cli.js context "fix dashboard loading" . --include-preview --budget 2000
-
-# Optional AI reranking of verified candidates
-node dist/cli.js context "explain the authentication flow" . --ai
-
-# Explicitly export a Markdown handoff
-node dist/cli.js context "add authentication to the dashboard" . --export
-
-# Check whether knowledge is stale
-node dist/cli.js status .
-
-```
-
-For large repositories, compile progress is shown as one live status line in an interactive terminal. Use bounded resumable compilation when needed:
-
-```bash
-node dist/cli.js compile . --resume --quiet
-node dist/cli.js compile . --max-files 25000 --max-file-size 1048576
-node dist/cli.js doctor .
-```
-
-Control progress explicitly when embedding Compylar in another tool:
-
-```bash
-node dist/cli.js compile . --progress plain
-node dist/cli.js compile . --progress none
-node dist/cli.js compile . --progress json 2> progress.ndjson
-node dist/cli.js compile . --analytics
-```
-
-Progress is written to stderr. Reports and `--json` output are written to stdout, so agents can consume them without parsing spinner output.
-
-Compilation reports `complete`, `partial`, or `cancelled`. Press `Ctrl-C` to save a checkpoint, then rerun with `--resume`.
-
-`compylar status .` compares the current repository against the compile-time manifest. It tracks source files, documentation, configuration, package manifests, lockfiles, additions, and deletions without storing file contents. When knowledge is stale, run `compylar refresh .`: it reuses unchanged source analysis and recompiles only what needs fresh extraction.
-
-Generated state lives in `.compylar/`:
-
-- `brain.db` — SQLite snapshots and future queryable facts
-- `brain.json` — validated machine-readable export
-- `brain.md` — readable Brain report
-- `checkpoint.json` — resumable work from an interrupted compile
-
-Context output is metadata-first: selected paths, symbols and locations, evidence, memory facts, and excluded context. Raw source excerpts are omitted unless `context --include-preview` is requested. `--budget` defaults to 2,000 estimated tokens across the whole response and reports evidence omitted by the budget. Markdown context files are snapshots and are created only with `context --export`.
-
-Each Brain also contains compact reusable memory chunks for repository, package, module, route, dependency, and test-strategy facts. It additionally has a deterministic repository profile for broad orientation and a learned-memory ledger for verified discoveries. Agent-created findings require source ranges; their source hashes are checked on refresh and stale findings are never returned as current. `refresh` reconciles chunks by stable ID and source fingerprint: only changed evidence creates a new chunk revision, while task context includes the chunks relevant to its selected source paths.
-
-Use `--json` on `compile`, `brain`, `analytics`, and `status` for automation. `brain --json` remains the stable machine-readable Brain object; human report flags do not change it. `diff` remains an alias for `status`.
-
-## Analyze a nested application
-
-The root repository and each standalone package are separate analysis scopes. For example:
-
-```bash
-node dist/cli.js compile examples/nextjs-demo
-node dist/cli.js brain examples/nextjs-demo
-```
-
-Compiling the root does not falsely attribute the example application's routes to Compylar.
-
-## Optional OpenAI enrichment
-
-Compylar is deterministic by default. OpenAI enrichment is disabled unless the project explicitly opts in through `.compylar/config.json`; credentials never belong in that file.
-
-```json
-{
-  "ai": {
-    "provider": "openai",
-    "mode": "optional",
-    "model": "gpt-5.6",
-    "timeoutMs": 30000
-  }
-}
-```
-
-When this optional mode is enabled, `OPENAI_API_KEY` supplies the credential through the environment or a secret manager. `OPENAI_MODEL` is not a Compylar configuration surface. If no key is available, enrichment reports `not-configured`; deterministic facts remain complete and authoritative. API errors are recorded as optional-enrichment failures and never replace repository facts.
-
-Context-time AI is separate and opt-in with `context --ai`. It may rerank and summarize only deterministic candidates already found by Compylar. It cannot authorize edits or invent files, symbols, routes, or repository behavior. Agent harnesses should consume `context --json` or the structured retrieval interface, ask users clarifying questions, and obtain approval before making changes.
-
-## Agent integration
-
-The portable [Compylar skill](skills/compylar/SKILL.md) encodes the low-cost agent workflow: check freshness, refresh only when needed, retrieve task context, inspect source only for unresolved implementation detail, then refresh validated changes. Install it through your agent’s skill installer or from this repository; the root [AGENTS.md](AGENTS.md) provides the same concise workflow for agents working on Compylar itself.
-
-For a deliberate project-scoped install, preview first and apply only after checking the destination:
-
-```bash
-# Codex: .agents/skills/compylar
-compylar install-agent . --agent codex --scope project
-compylar install-agent . --agent codex --scope project --apply
-
-# Claude Code: .claude/skills/compylar
-compylar install-agent . --agent claude --scope project --apply
-
-# OpenCode: .agents/skills/compylar
-compylar install-agent . --agent opencode --scope project --apply
-```
-
-This copies only the portable skill and refuses to overwrite an existing one. It never writes global agent configuration. See the [agent integration guide](docs/AGENT_INTEGRATION.md) for supported agent locations, setup behavior, and verification.
-
-`context --ai` is a one-request opt-in for evidence-constrained reranking; it still requires an environment-provided key and never changes the Brain’s deterministic facts.
 
 ## Development
 
@@ -272,12 +146,25 @@ pnpm test
 pnpm build
 ```
 
-Run the complete temporary-fixture demonstration with `compylar demo` (or
-`npx -y compylar@0.1.1 demo` after publishing). It never changes the checked-in
-example repository. `pnpm demo` remains the source-checkout equivalent.
+Useful developer commands:
 
-Run `pnpm first-run` for the compact version: selected task context, the exact detected change, memory reuse, and elapsed work—without the full context document.
+```bash
+pnpm demo
+pnpm first-run
+pnpm benchmark
+```
 
-Run `pnpm benchmark` for a machine-readable measurement against the same temporary fixture. It reports the files selected for a concrete task, the detected change, memory chunks created/updated/reused/removed, and elapsed compile/context/status/refresh operations. It is a regression and demo measurement, not a universal performance claim; compare runs on the same machine and fixture.
+## Notes on AI usage
 
-The design and command contract are documented in [the compiler specification](docs/COMPYLAR_COMPILER_SPEC.md), [the CLI contract](docs/CLI_CONTRACT.md), [the Build Week MVP plan](docs/OPENAI_BUILD_WEEK_MVP_PLAN.md), [the Build Week submission runbook](docs/SUBMISSION_RUNBOOK.md), [the engineering roadmap](docs/ROADMAP.md), and [the research notes](docs/RESEARCH.md).
+Compylar is designed to be useful to AI agents, but the repository itself is not an AI-only product. The core behavior is based on deterministic repository analysis, with optional AI enrichment available only when explicitly enabled by the user.
+
+If you are using Compylar in a real project, the most important thing is to keep the README and project description grounded in what the code actually does. That is the difference between a polished project page and a generic generated one.
+
+## Project structure
+
+The repository includes:
+
+- the CLI implementation in the `src/` directory
+- example applications under `examples/`
+- agent integration assets in `skills/` and `AGENTS.md`
+- design and contract documents in `docs/`
