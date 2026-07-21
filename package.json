@@ -12,6 +12,9 @@
   },
   "files": [
     "dist",
+    "examples/nextjs-demo/app",
+    "examples/nextjs-demo/lib",
+    "examples/nextjs-demo/package.json",
     "skills",
     "AGENTS.md",
     "README.md",

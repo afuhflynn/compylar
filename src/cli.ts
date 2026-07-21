@@ -22,6 +22,7 @@ import {
   memoryRefreshSummary,
 } from "./analytics.js";
 import { createProgressController, type ProgressMode } from "./progress.js";
+import { runDemo } from "./demo.js";
 import { reconcileSemanticIndex, repositoryBootstrap, repositoryCommitMemory, repositoryCompileDiff, repositoryFacts, repositoryIngestIndex, repositoryLearn, repositoryLearned, repositoryLookup, repositoryMemoryReview, repositoryOverview, repositoryReferences, repositoryRefresh, repositoryRoutes, repositoryStatus, repositorySync, repositorySystems } from "./services.js";
 import { COMPYLAR_VERSION } from "./version.js";
 import { loadConfig } from "./config.js";
@@ -130,6 +131,12 @@ outputOptions(
     if (overview.unknowns.length) console.log(`\nUnknowns: ${overview.unknowns.join(" ")}`);
   });
 });
+program
+  .command("demo")
+  .description("Run the packaged end-to-end demonstration in a temporary directory")
+  .action(async () => {
+    await runDemo();
+  });
 program
   .command("init")
   .description("Initialize Compylar state in a repository")

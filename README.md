@@ -14,7 +14,13 @@ Compylar is a local Knowledge Compiler for AI coding agents. It analyzes a TypeS
 
 ## First 60 seconds
 
-From a Compylar checkout, install the CLI once:
+Run the judge-ready demonstration directly from npm—no clone or build required:
+
+```bash
+npx -y compylar@0.1.0 demo
+```
+
+To use Compylar in a repository, install the CLI once:
 
 ```bash
 pnpm install
@@ -87,6 +93,9 @@ gaps, or blockers.
 pnpm install
 pnpm build
 ```
+
+Source builds are for contributors. For a packaged end-to-end proof, run
+`npx -y compylar@0.1.0 demo` after the package is published.
 
 The build verifies that the generated CLI entrypoint is executable on POSIX systems. On Windows, npm provides the normal `.cmd` launcher instead; no Unix permission bit is required.
 
@@ -253,7 +262,9 @@ pnpm test
 pnpm build
 ```
 
-Run the complete temporary-fixture demonstration with `pnpm demo`. It never changes the checked-in example repository.
+Run the complete temporary-fixture demonstration with `compylar demo` (or
+`npx -y compylar@0.1.0 demo` after publishing). It never changes the checked-in
+example repository. `pnpm demo` remains the source-checkout equivalent.
 
 Run `pnpm first-run` for the compact version: selected task context, the exact detected change, memory reuse, and elapsed work—without the full context document.
 
