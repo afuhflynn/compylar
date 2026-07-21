@@ -9,7 +9,7 @@ export const EvidenceSchema = z.object({
 export const SourceFileSchema = z.object({
   path: z.string(),
   packageName: z.string(),
-  kind: z.enum(["ts", "tsx", "js", "jsx", "mts", "cts", "mjs", "cjs"]),
+  kind: z.string().min(1),
   hash: z.string(),
   lines: z.number().int().nonnegative(),
   imports: z.array(z.string()),
@@ -17,6 +17,25 @@ export const SourceFileSchema = z.object({
   preview: z.string(),
   diagnostics: z.array(z.string()),
   evidence: z.array(EvidenceSchema),
+});
+export const PrismaModelSchema = z.object({
+  name: z.string(), file: z.string(), line: z.number().int().positive(),
+  fields: z.array(z.object({ name: z.string(), type: z.string(), line: z.number().int().positive() })),
+  relations: z.array(z.object({ field: z.string(), target: z.string(), line: z.number().int().positive() })),
+  kind: z.enum(["model", "enum"]),
+});
+export const ReferenceSchema = z.object({
+  from: z.string(), to: z.string(), symbol: z.string(), line: z.number().int().positive(),
+  kind: z.enum(["call", "reference", "test"]), confidence: z.enum(["high", "medium"]),
+});
+export const GuardSchema = z.object({
+  file: z.string(), line: z.number().int().positive(), kind: z.enum(["middleware", "proxy", "guard-call"]),
+  name: z.string(), matcher: z.array(z.string()),
+});
+export const CapabilitySchema = z.object({
+  adapter: z.string(),
+  status: z.enum(["active", "not-detected", "structural-only"]),
+  facts: z.array(z.string()),
 });
 export const SymbolSchema = z.object({
   name: z.string(),
@@ -34,13 +53,14 @@ export const SymbolSchema = z.object({
   line: z.number().int().positive(),
   exported: z.boolean(),
   signature: z.string(),
+  declaration: z.string().optional(),
 });
 export const RouteSchema = z.object({
   path: z.string(),
   file: z.string(),
   packageName: z.string(),
-  router: z.enum(["next-app", "next-pages"]),
-  kind: z.enum(["page", "layout", "api"]),
+  router: z.string().min(1),
+  kind: z.string().min(1),
   methods: z.array(z.string()),
   evidence: z.array(EvidenceSchema),
 });
@@ -48,7 +68,7 @@ export const PackageSchema = z.object({
   name: z.string(),
   rootPath: z.string(),
   relativePath: z.string(),
-  framework: z.enum(["nextjs", "typescript", "unknown"]),
+  framework: z.string().min(1),
   scripts: z.record(z.string()),
   dependencies: z.record(z.string()),
   devDependencies: z.record(z.string()),
@@ -62,6 +82,11 @@ export const TrackedFileSchema = z.object({
   hash: z.string().optional(),
   size: z.number().int().nonnegative(),
   mtimeMs: z.number().nonnegative(),
+});
+export const RepositoryFactSchema = z.object({
+  kind: z.enum(["documentation", "setup", "script", "environment", "schema", "server-action", "job"]),
+  name: z.string(), summary: z.string(), source: z.string(), line: z.number().int().positive(),
+  excerpt: z.string().optional(), confidence: z.enum(["high", "medium", "low"]),
 });
 export const MemoryChunkSchema = z.object({
   id: z.string(),
@@ -88,8 +113,87 @@ export const RepositoryMemorySchema = z.object({
   }),
   reconciledAt: z.string(),
 });
+export const LearnedFindingSchema = z.object({
+  id: z.string(),
+  kind: z.enum(["flow", "system", "constraint", "convention", "gotcha", "decision", "task-outcome", "unknown"]),
+  summary: z.string().min(1),
+  authority: z.enum(["compiler", "agent", "human"]),
+  sources: z.array(z.object({
+    path: z.string(),
+    startLine: z.number().int().positive(),
+    endLine: z.number().int().positive(),
+    sourceHash: z.string(),
+  })),
+  originQuestion: z.string().optional(),
+  createdAt: z.string(),
+  verifiedAt: z.string(),
+  confidence: z.enum(["high", "medium", "low"]),
+  state: z.enum(["current", "stale", "superseded", "archived"]),
+  supersedes: z.string().optional(),
+  stableKey: z.string().min(1).optional(),
+  systems: z.array(z.string().min(1)).default([]),
+});
+export const LearnedMemorySchema = z.object({
+  schemaVersion: z.literal(1),
+  findings: z.array(LearnedFindingSchema),
+});
+export const SemanticMemoryCategorySchema = z.enum([
+  "foundation", "system", "flow", "contract", "test-guarantee", "convention", "unknown",
+]);
+export const SemanticIndexSchema = z.object({
+  schemaVersion: z.literal(1),
+  status: z.enum(["absent", "in-progress", "complete", "partially-stale", "structurally-stale"]),
+  sourceFingerprint: z.string().optional(),
+  manifestHash: z.string().optional(),
+  artifactPath: z.string().optional(),
+  artifactHash: z.string().optional(),
+  producerVersion: z.string().optional(),
+  completedAt: z.string().optional(),
+  coverage: z.array(SemanticMemoryCategorySchema),
+  blockers: z.array(z.string()),
+  unknowns: z.array(z.string()),
+  findingCount: z.number().int().nonnegative(),
+});
+export const SemanticIndexManifestSchema = z.object({
+  schemaVersion: z.literal(1),
+  producer: z.object({ name: z.literal("codebase-index"), version: z.string().min(1) }),
+  generatedAt: z.string(),
+  brainFingerprint: z.string().min(1),
+  artifact: z.object({ path: z.string().min(1), sha256: z.string().regex(/^[a-f0-9]{64}$/i) }),
+  verification: z.object({ complete: z.boolean(), blockers: z.array(z.string()) }),
+  coverage: z.array(SemanticMemoryCategorySchema),
+  unknowns: z.array(z.string()),
+  findings: z.array(z.object({
+    key: z.string().min(1),
+    kind: z.enum(["flow", "system", "constraint", "convention", "gotcha", "unknown"]),
+    summary: z.string().min(1),
+    confidence: z.enum(["high", "medium", "low"]),
+    sources: z.array(z.object({ path: z.string(), startLine: z.number().int().positive(), endLine: z.number().int().positive() })).min(1),
+  })),
+});
+export const MemoryDeltaManifestSchema = z.object({
+  schemaVersion: z.literal(1),
+  task: z.string().min(1),
+  findings: z.array(z.object({
+    key: z.string().min(1),
+    kind: z.enum(["flow", "system", "constraint", "convention", "gotcha", "decision", "task-outcome", "unknown"]),
+    summary: z.string().min(1),
+    systems: z.array(z.string().min(1)).min(1),
+    confidence: z.enum(["high", "medium", "low"]),
+    sources: z.array(z.object({ path: z.string(), startLine: z.number().int().positive(), endLine: z.number().int().positive() })).min(1),
+  })),
+  dismissal: z.object({ reason: z.string().min(1), sources: z.array(z.object({ path: z.string(), startLine: z.number().int().positive(), endLine: z.number().int().positive() })).min(1) }).optional(),
+}).refine((value) => value.findings.length > 0 || value.dismissal !== undefined, { message: "A memory delta needs a finding or a cited dismissal." });
+export const RepositoryProfileSchema = z.object({
+  summary: z.string(),
+  stack: z.array(z.string()),
+  directories: z.array(z.object({ path: z.string(), purpose: z.string() })),
+  entryPoints: z.array(z.string()),
+  evidence: z.array(EvidenceSchema),
+  unknowns: z.array(z.string()),
+});
 export const BrainSchema = z.object({
-  brainVersion: z.literal(2),
+  brainVersion: z.literal(4),
   repo: z.object({
     name: z.string(),
     rootPath: z.string(),
@@ -100,6 +204,10 @@ export const BrainSchema = z.object({
   fingerprint: z.string(),
   trackedFiles: z.array(TrackedFileSchema).optional(),
   memory: RepositoryMemorySchema.optional(),
+  learnedMemory: LearnedMemorySchema.optional(),
+  semanticIndex: SemanticIndexSchema.optional(),
+  facts: z.array(RepositoryFactSchema).optional(),
+  profile: RepositoryProfileSchema.optional(),
   status: z.enum(["complete", "partial", "cancelled", "failed"]),
   analysis: z.object({
     filesDiscovered: z.number().int().nonnegative(),
@@ -116,6 +224,10 @@ export const BrainSchema = z.object({
   packages: z.array(PackageSchema),
   files: z.array(SourceFileSchema),
   symbols: z.array(SymbolSchema),
+  prisma: z.array(PrismaModelSchema).optional(),
+  references: z.array(ReferenceSchema).optional(),
+  guards: z.array(GuardSchema).optional(),
+  capabilities: z.array(CapabilitySchema).optional(),
   routes: z.array(RouteSchema),
   dependencyGraph: z.array(
     z.object({
@@ -152,8 +264,20 @@ export const BrainSchema = z.object({
 export type Evidence = z.infer<typeof EvidenceSchema>;
 export type RepositoryFile = z.infer<typeof SourceFileSchema>;
 export type RepositoryBrain = z.infer<typeof BrainSchema>;
+export type PrismaModel = z.infer<typeof PrismaModelSchema>;
+export type RepositoryReference = z.infer<typeof ReferenceSchema>;
+export type RepositoryGuard = z.infer<typeof GuardSchema>;
+export type RepositoryCapability = z.infer<typeof CapabilitySchema>;
 export type MemoryChunk = z.infer<typeof MemoryChunkSchema>;
 export type RepositoryMemory = z.infer<typeof RepositoryMemorySchema>;
+export type LearnedFinding = z.infer<typeof LearnedFindingSchema>;
+export type LearnedMemory = z.infer<typeof LearnedMemorySchema>;
+export type SemanticMemoryCategory = z.infer<typeof SemanticMemoryCategorySchema>;
+export type SemanticIndex = z.infer<typeof SemanticIndexSchema>;
+export type SemanticIndexManifest = z.infer<typeof SemanticIndexManifestSchema>;
+export type MemoryDeltaManifest = z.infer<typeof MemoryDeltaManifestSchema>;
+export type RepositoryProfile = z.infer<typeof RepositoryProfileSchema>;
+export type RepositoryFact = z.infer<typeof RepositoryFactSchema>;
 export type PackageUnit = z.infer<typeof PackageSchema>;
 export type CompileLimits = {
   maxFiles: number;
@@ -188,7 +312,7 @@ export type ProgressEvent = {
   file?: string;
 };
 export type ContextPack = {
-  brainVersion: 2;
+  brainVersion: 4;
   status: "context-ready";
   intent: "implementation" | "debugging" | "explanation" | "overview";
   actionability: "actionable" | "underspecified";
@@ -198,6 +322,12 @@ export type ContextPack = {
   task: string;
   generatedAt: string;
   taskSummary: string;
+  queryPlan: {
+    strategy: "repository-profile" | "exact-lookup" | "system-retrieval" | "targeted-read";
+    normalizedQuestion: string;
+    sourceReadRequired: boolean;
+  };
+  overview?: RepositoryProfile;
   selectedFiles: Array<{
     path: string;
     packageName: string;
@@ -214,6 +344,7 @@ export type ContextPack = {
     sourcePaths: string[];
     confidence: MemoryChunk["confidence"];
   }>;
+  learnedFindings: Array<Pick<LearnedFinding, "id" | "kind" | "summary" | "authority" | "sources" | "confidence" | "state" | "systems">>;
   relevantPackages: string[];
   architectureNotes: string[];
   constraints: string[];
@@ -245,7 +376,7 @@ export type ContextPack = {
   };
 };
 export type ContextClarification = {
-  brainVersion: 2;
+  brainVersion: 4;
   status: "needs-clarification";
   intent: "ambiguous";
   actionability: "ambiguous";

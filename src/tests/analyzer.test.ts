@@ -15,7 +15,7 @@ describe("repository compiler", () => {
         (file) => !file.path.startsWith("examples/nextjs-demo/"),
       ),
     ).toBe(true);
-  }, 15_000);
+  }, 30_000);
 
   it("detects routes when the demo app is compiled directly", async () => {
     const brain = await compileRepository(

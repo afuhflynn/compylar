@@ -1,4 +1,5 @@
 import { ContextClarification, ContextPack, ContextResult, RepositoryBrain } from "./types.js";
+import { deriveRepositoryProfile } from "./memory.js";
 
 const STOPWORDS = new Set([
   "a", "an", "and", "are", "as", "at", "for", "from", "in", "into",
@@ -21,7 +22,6 @@ const SYNONYMS: Record<string, string[]> = {
   auth: ["authentication", "authorization", "login", "signin", "sign-in"],
   authentication: ["auth", "authorization", "login", "signin", "sign-in"],
   login: ["auth", "authentication", "signin", "sign-in"],
-  dashboard: ["home", "overview"],
   loading: ["pending", "spinner", "fetch", "fetching"],
 };
 
@@ -31,6 +31,7 @@ export type ContextOptions = {
   budgetTokens?: number;
 };
 const DEFAULT_CONTEXT_BUDGET_TOKENS = 2000;
+const MIN_CONTEXT_BUDGET_TOKENS = 512;
 const estimatedTokens = (value: unknown) => Math.ceil(Buffer.byteLength(JSON.stringify(value), "utf8") / 4);
 
 const tokenize = (task: string) =>
@@ -88,7 +89,7 @@ function missingInformation(intent: ContextPack["intent"], terms: string[]): str
 function clarification(brain: RepositoryBrain, task: string): ContextClarification {
   const areas = candidateAreas(brain);
   return {
-    brainVersion: 2,
+    brainVersion: 4,
     status: "needs-clarification",
     intent: "ambiguous",
     actionability: "ambiguous",
@@ -110,11 +111,18 @@ const codeTokens = (value: string) => tokenize(value).filter((term) => !STOPWORD
 function expandSystem(brain: RepositoryBrain, seeds: string[], maxDepth = 3) {
   const visited = new Set(seeds);
   let frontier = [...seeds];
+  const degree = new Map<string, number>();
+  for (const edge of brain.dependencyGraph.filter((item) => item.kind === "internal")) {
+    degree.set(edge.from, (degree.get(edge.from) ?? 0) + 1);
+    degree.set(edge.to, (degree.get(edge.to) ?? 0) + 1);
+  }
   for (let depth = 0; depth < maxDepth && frontier.length; depth += 1) {
     const next: string[] = [];
     for (const edge of brain.dependencyGraph.filter((item) => item.kind === "internal")) {
-      if (frontier.includes(edge.from) && !visited.has(edge.to)) { visited.add(edge.to); next.push(edge.to); }
-      if (frontier.includes(edge.to) && !visited.has(edge.from)) { visited.add(edge.from); next.push(edge.from); }
+      // Shared barrels/types are useful only when they were query seeds. Do not
+      // let a high-degree hub turn every consumer into task context.
+      if (frontier.includes(edge.from) && !visited.has(edge.to) && (seeds.includes(edge.to) || (degree.get(edge.to) ?? 0) <= 12)) { visited.add(edge.to); next.push(edge.to); }
+      if (frontier.includes(edge.to) && !visited.has(edge.from) && (seeds.includes(edge.from) || (degree.get(edge.from) ?? 0) <= 12)) { visited.add(edge.from); next.push(edge.from); }
     }
     frontier = next;
   }
@@ -132,8 +140,12 @@ function buildDeterministicContext(
   options: ContextOptions = {},
 ): ContextPack {
   const budgetTokens = options.budgetTokens ?? DEFAULT_CONTEXT_BUDGET_TOKENS;
+  if (budgetTokens < MIN_CONTEXT_BUDGET_TOKENS) {
+    throw new Error(`Context budget must be at least ${MIN_CONTEXT_BUDGET_TOKENS} tokens; smaller requests cannot carry a trustworthy context contract.`);
+  }
   const includePreview = options.includePreview === true;
   const terms = tokenize(task);
+  const broadOverview = intent === "overview" && /\b(this|the)?\s*(project|repository|codebase|app)\b/i.test(task);
   const searchableTerms = expandedTerms(terms);
   const scored = brain.files.map((file) => {
     const symbols = brain.symbols.filter((symbol) => symbol.file === file.path);
@@ -161,12 +173,14 @@ function buildDeterministicContext(
       (routeMatch ? 2 : 0);
     return { file, symbols, route, routeMatch, score, hits, exactPathHits, exactSymbolHits };
   }).sort((a, b) => b.score - a.score || a.file.path.localeCompare(b.file.path));
-  const selected = scored.filter((item) => item.score > 0).slice(0, 4);
+  const selected = broadOverview
+    ? []
+    : scored.filter((item) => item.hits.length > 0 || item.exactPathHits.length > 0 || item.exactSymbolHits.length > 0 || item.routeMatch).slice(0, 4);
   const expanded = selected.length ? expandSystem(brain, selected.map((item) => item.file.path)) : { files: [], relationships: [] };
   const byPath = new Map(scored.map((item) => [item.file.path, item]));
   const fallback = selected.length
     ? [...selected, ...expanded.files.filter((file) => !selected.some((item) => item.file.path === file)).map((file) => byPath.get(file)).filter((item): item is typeof scored[number] => Boolean(item))].slice(0, 12)
-    : scored.slice(0, Math.min(8, scored.length));
+    : [];
   const relevantPackages = [...new Set(fallback.map((item) => item.file.packageName))];
   const selectedPaths = new Set(fallback.map((item) => item.file.path));
   const memoryChunks = (brain.memory?.chunks ?? [])
@@ -184,14 +198,21 @@ function buildDeterministicContext(
       sourcePaths: chunk.sourcePaths,
       confidence: chunk.confidence,
     }));
+  const learnedFindings = (brain.learnedMemory?.findings ?? [])
+    .filter((finding) => finding.state === "current")
+    .filter((finding) => broadOverview || finding.sources.some((source) => selectedPaths.has(source.path)))
+    .slice(0, 12)
+    .map(({ id, kind, summary, authority, sources, confidence, state, systems }) => ({ id, kind, summary, authority, sources, confidence, state, systems }));
   const missing = missingInformation(intent, terms);
-  const confidence = expanded.files.length >= 3 ? "high" : selected.length ? "medium" : "low";
+  const architectureQuestion = /\b(?:architecture|system|flow|state|design|constraint|invariant|tradeoff)\b/i.test(task);
+  const semanticArchitectureReady = brain.semanticIndex === undefined || (brain.semanticIndex.status === "complete" && (brain.learnedMemory?.findings ?? []).some((finding) => finding.state === "current" && finding.systems.length > 0));
   const systemTerms = terms.filter((term) => ![...IMPLEMENTATION_TERMS, ...DEBUGGING_TERMS, ...EXPLANATION_TERMS].includes(term));
   const systems: ContextPack["systems"] = expanded.files.length >= 2 ? [{
     name: systemTerms.slice(0, 3).join(" ") || "related repository system",
     files: expanded.files,
     relationships: expanded.relationships,
   }] : [];
+  const confidence = broadOverview ? "high" : systems.length ? "high" : selected.length ? "medium" : "low";
 
   const selectedFiles: ContextPack["selectedFiles"] = fallback.map((item) => ({
     path: item.file.path,
@@ -207,7 +228,7 @@ function buildDeterministicContext(
     symbols: item.symbols.map((symbol) => `${symbol.name} (${symbol.kind}, line ${symbol.line})`),
   }));
   const base: Omit<ContextPack, "budget"> = {
-    brainVersion: 2,
+    brainVersion: 4,
     status: "context-ready",
     intent,
     actionability: missing.length ? "underspecified" : "actionable",
@@ -217,8 +238,15 @@ function buildDeterministicContext(
     task,
     generatedAt: new Date().toISOString(),
     taskSummary: `${intent === "debugging" ? "Investigate" : intent === "explanation" ? "Explain" : intent === "overview" ? "Describe" : "Plan"}: ${task}. Use verified evidence before proposing changes.`,
+    queryPlan: {
+      strategy: broadOverview ? "repository-profile" : systems.length ? "system-retrieval" : selected.length ? "exact-lookup" : "targeted-read",
+      normalizedQuestion: broadOverview ? "repository overview" : systemTerms.join(" ") || task,
+      sourceReadRequired: (architectureQuestion && !semanticArchitectureReady) || (!broadOverview && (!systems.length || intent === "implementation" || intent === "debugging")),
+    },
+    overview: broadOverview ? (brain.profile ?? deriveRepositoryProfile(brain)) : undefined,
     selectedFiles,
     memoryChunks,
+    learnedFindings,
     relevantPackages,
     architectureNotes: [
       brain.architectureSummary,
@@ -232,7 +260,7 @@ function buildDeterministicContext(
     ],
     agentInstructions: [
       "Reflect the request and ask for missing details before editing when actionability is underspecified.",
-      "Read the selected source before proposing changes.",
+      broadOverview ? "Answer from the repository profile; do not reopen source merely to restate architecture." : "Read only the selected, current source range when implementation detail is truly required.",
       "Use the package, route, symbol, and dependency evidence to trace the task.",
       "Treat deterministic facts as authoritative; call out assumptions before inventing missing behavior.",
     ],
@@ -242,8 +270,8 @@ function buildDeterministicContext(
     candidateAreas: candidateAreas(brain),
     systems,
     coverage: {
-      decision: systems.length || selected.length >= 2 ? "memory-sufficient" : selected.length ? "targeted-read-required" : "insufficient-index",
-      unresolved: systems.length ? [] : ["No connected system could be proven from current repository facts."],
+      decision: architectureQuestion && !semanticArchitectureReady ? "insufficient-index" : broadOverview || systems.length ? "memory-sufficient" : selected.length ? "targeted-read-required" : "insufficient-index",
+      unresolved: architectureQuestion && !semanticArchitectureReady ? ["semantic-architecture-memory-not-complete"] : broadOverview ? (brain.profile ?? deriveRepositoryProfile(brain)).unknowns : systems.length ? [] : selected.length ? ["missing-contract"] : ["no-evidence"],
     },
     ai: { status: "not-requested" },
   };
@@ -300,6 +328,9 @@ function buildDeterministicContext(
     result = pack();
   }
   result.budget.estimatedTokens = estimatedTokens(result);
+  if (result.budget.estimatedTokens > budgetTokens) {
+    throw new Error(`Context cannot fit the ${budgetTokens}-token budget without dropping required contract fields. Increase --budget.`);
+  }
   return result;
 }
 
@@ -315,6 +346,13 @@ export function buildContext(brain: RepositoryBrain, task: string, options: Cont
 export function buildContextResult(brain: RepositoryBrain, task: string, options: ContextOptions = {}): ContextResult {
   const terms = tokenize(task);
   const classified = classify(task, terms);
+  if (classified.intent === "debugging" && missingInformation("debugging", terms).length) {
+    return {
+      ...clarification(brain, task),
+      reason: "Debugging requires a target area, observed symptom, expected behavior, and reproduction details.",
+      missingInformation: missingInformation("debugging", terms),
+    };
+  }
   return classified.ambiguous
     ? clarification(brain, task)
     : buildDeterministicContext(brain, task, classified.intent as Exclude<ContextIntent, "ambiguous">, options);
@@ -336,6 +374,24 @@ export function contextMarkdown(pack: ContextPack) {
     ``,
     `## Task summary`,
     pack.taskSummary,
+    ``,
+    ...(pack.overview ? [
+      `## Repository overview`,
+      pack.overview.summary,
+      ``,
+      `Stack: ${pack.overview.stack.join(", ") || "not deterministically identified"}`,
+      ``,
+      `Directories:`,
+      ...pack.overview.directories.map((directory) => `- \`${directory.path}\`: ${directory.purpose}`),
+      ``,
+      `Entry points:`,
+      ...(pack.overview.entryPoints.length ? pack.overview.entryPoints.map((entry) => `- ${entry}`) : ["- None identified."]),
+      ``,
+    ] : []),
+    `## Query plan`,
+    `- Strategy: ${pack.queryPlan.strategy}`,
+    `- Normalized question: ${pack.queryPlan.normalizedQuestion}`,
+    `- Source read required: ${pack.queryPlan.sourceReadRequired ? "yes, only a targeted current range" : "no"}`,
     ``,
     `## Memory coverage`,
     `- ${pack.coverage.decision}`,
@@ -370,6 +426,14 @@ export function contextMarkdown(pack: ContextPack) {
         `${chunk.kind} · ${chunk.confidence} confidence · sources: ${chunk.sourcePaths.map((source) => `\`${source}\``).join(", ")}`,
         chunk.summary,
         "",
+      ]),
+    ] : []),
+    ...(pack.learnedFindings.length ? [
+      `## Learned memory`,
+      ...pack.learnedFindings.flatMap((finding) => [
+        `### ${finding.kind}: ${finding.summary}`,
+        `${finding.authority} · ${finding.confidence} confidence · sources: ${finding.sources.length ? finding.sources.map((source) => `\`${source.path}:${source.startLine}-${source.endLine}\``).join(", ") : "human-authoritative"}`,
+        ``,
       ]),
     ] : []),
     `## Architecture notes`,

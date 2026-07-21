@@ -4,7 +4,7 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { compileRepository } from "../analyzer.js";
 import { repositoryRefresh, repositoryStatus } from "../services.js";
-import { saveBrain } from "../storage.js";
+import { loadBrain, saveBrain } from "../storage.js";
 
 async function fixtureRoot() {
   const root = await mkdtemp(path.join(os.tmpdir(), "compylar-status-"));
@@ -61,5 +61,19 @@ describe("knowledge status", () => {
     expect((await repositoryStatus(root)).stale).toBe(false);
     await writeFile(path.join(root, "src", "main.ts"), "export const answer = 44;\n");
     expect((await repositoryStatus(root)).changed).toContain("src/main.ts");
+  });
+
+  it("loads a historical v2 Brain that predates status and analysis fields", async () => {
+    const root = await fixtureRoot();
+    const brain = await compileRepository(root, { ai: false, progress: false });
+    const legacy = { ...brain } as Record<string, unknown>;
+    delete legacy.status;
+    delete legacy.analysis;
+    await writeFile(path.join(root, ".compylar", "brain.json"), JSON.stringify(legacy));
+
+    await expect(loadBrain(root)).resolves.toMatchObject({
+      status: "complete",
+      analysis: expect.objectContaining({ filesAnalyzed: 2 }),
+    });
   });
 });

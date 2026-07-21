@@ -13,7 +13,7 @@ async function fixtureRoot() {
   await writeFile(path.join(root, "package.json"), JSON.stringify({ name: "memory-fixture" }));
   await writeFile(path.join(root, "README.md"), "# Memory fixture\n");
   await writeFile(path.join(root, "tsconfig.json"), JSON.stringify({ compilerOptions: {} }));
-  await writeFile(path.join(root, "src", "index.ts"), "export * from './alpha.js';\n");
+  await writeFile(path.join(root, "src", "index.ts"), "import { alpha } from './alpha.js';\nexport { alpha };\n");
   await writeFile(path.join(root, "src", "alpha.ts"), "export const alpha = 1;\n");
   await writeFile(path.join(root, "src", "beta.ts"), "export const beta = 2;\n");
   const brain = await compileRepository(root, { ai: false, progress: false });
@@ -42,6 +42,7 @@ describe("Repository Memory", () => {
         expect.objectContaining({ id: "entry-point:src/index.ts", kind: "entry-point" }),
       ]),
     );
+    expect(brain.profile?.summary).toContain("Memory fixture");
   });
 
   it("refreshes only chunks whose source evidence changed", async () => {
@@ -56,6 +57,7 @@ describe("Repository Memory", () => {
 
     expect(refreshed.brain?.memory?.changes.updated).toContain("module:src/alpha.ts");
     expect(chunks.find((chunk) => chunk.id === "module:src/beta.ts")).toEqual(unchanged);
+    expect(refreshed.brain?.memory?.changes.updated).toContain("dependency:src/index.ts");
   });
 
   it("includes task-relevant chunks in deterministic agent context", async () => {
@@ -68,5 +70,14 @@ describe("Repository Memory", () => {
         expect.objectContaining({ id: "module:src/alpha.ts" }),
       ]),
     );
+  });
+
+  it("tracks re-export relationships as dependency evidence", async () => {
+    const { root } = await fixtureRoot();
+    await writeFile(path.join(root, "src", "index.ts"), "export * from './alpha.js';\n");
+    const refreshed = await repositoryRefresh(root, { ai: false, progress: false });
+    expect(refreshed.brain?.dependencyGraph).toEqual(expect.arrayContaining([
+      expect.objectContaining({ from: "src/index.ts", to: "src/alpha.ts", kind: "internal" }),
+    ]));
   });
 });

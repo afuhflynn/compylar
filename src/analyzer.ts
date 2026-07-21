@@ -2,13 +2,19 @@ import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import fg from "fast-glob";
-import { Project, SourceFile, SyntaxKind } from "ts-morph";
+import { Project, SourceFile } from "ts-morph";
 import { enrichArchitecture } from "./ai.js";
 import { defaultConfig, CompileConfig, loadConfig } from "./config.js";
 import { loadBrain, loadCheckpoint, saveCheckpoint } from "./storage.js";
 import { ProgressReporter, terminalProgress } from "./progress.js";
 import { trackRepository } from "./tracker.js";
-import { reconcileMemory } from "./memory.js";
+import { deriveRepositoryProfile, reconcileMemory } from "./memory.js";
+import { capabilitiesFor, supportedSourceExtensions } from "./adapters.js";
+import { resolveTypeScriptImport, routeForTypeScript, typeScriptRelationships, typeScriptSymbols } from "./adapters/typescript.js";
+import { prismaFacts } from "./adapters/prisma.js";
+import { goFacts } from "./adapters/go.js";
+import { pythonFacts as extractPythonFacts, resolvePythonImport as resolvePythonAdapterImport } from "./adapters/python.js";
+import { rustFacts } from "./adapters/rust.js";
 import {
   CompileCheckpoint,
   CompileLimits,
@@ -17,16 +23,7 @@ import {
   RepositoryBrain,
 } from "./types.js";
 
-const SOURCE_EXTENSIONS = [
-  "ts",
-  "tsx",
-  "js",
-  "jsx",
-  "mts",
-  "cts",
-  "mjs",
-  "cjs",
-];
+const SOURCE_EXTENSIONS = supportedSourceExtensions;
 const hash = (value: string) =>
   crypto.createHash("sha256").update(value).digest("hex").slice(0, 16);
 const rel = (root: string, value: string) =>
@@ -36,12 +33,10 @@ const evidence = (
   detail: string,
   confidence: Evidence["confidence"] = "high",
 ): Evidence => ({ source, detail, confidence });
-const packageFramework = (pkg: any): PackageUnit["framework"] =>
+const packageFramework = async (pkg: any, root: string): Promise<PackageUnit["framework"]> =>
   pkg?.dependencies?.next || pkg?.devDependencies?.next
     ? "nextjs"
-    : pkg
-      ? "typescript"
-      : "unknown";
+    : await fs.access(path.join(root, "pyproject.toml")).then(() => "python").catch(() => fs.access(path.join(root, "go.mod")).then(() => "go").catch(() => fs.access(path.join(root, "Cargo.toml")).then(() => "rust").catch(() => pkg && Object.keys(pkg).length ? "typescript" : "unknown")));
 
 async function readJson(file: string) {
   try {
@@ -56,12 +51,64 @@ async function workspacePatterns(root: string) {
       path.join(root, "pnpm-workspace.yaml"),
       "utf8",
     );
-    return [...yaml.matchAll(/^\s*-\s*["']?([^"'\s]+)["']?\s*$/gm)].map(
+    const block = [...yaml.matchAll(/^\s*-\s*["']?([^"'\s]+)["']?\s*$/gm)].map(
       (m) => m[1],
     );
+    const inline = [...yaml.matchAll(/^\s*packages\s*:\s*\[([^\]]+)\]/gm)]
+      .flatMap((match) => match[1].split(",").map((value) => value.trim().replace(/^["']|["']$/g, "")))
+      .filter(Boolean);
+    return [...new Set([...block, ...inline])];
   } catch {
     return [];
   }
+}
+function prismaRows(file: string, text: string): NonNullable<RepositoryBrain["prisma"]> {
+  const rows: NonNullable<RepositoryBrain["prisma"]> = [];
+  const lines = text.split(/\r?\n/);
+  let current: NonNullable<RepositoryBrain["prisma"]>[number] | undefined;
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index];
+    const declaration = line.match(/^\s*(model|enum)\s+(\w+)\s*\{/);
+    if (declaration) {
+      current = { name: declaration[2], kind: declaration[1] as "model" | "enum", file, line: index + 1, fields: [], relations: [] };
+      rows.push(current);
+      continue;
+    }
+    if (!current || /^\s*}/.test(line) || /^\s*\/\//.test(line)) { if (/^\s*}/.test(line)) current = undefined; continue; }
+    const field = line.match(/^\s*(\w+)\s+([\w\[\]?]+)/);
+    if (!field) continue;
+    current.fields.push({ name: field[1], type: field[2], line: index + 1 });
+    const target = field[2].replace(/[\[\]?]/g, "");
+    if (/\@relation\b/.test(line) || /^[A-Z]/.test(target)) current.relations.push({ field: field[1], target, line: index + 1 });
+  }
+  return rows;
+}
+function pythonFacts(file: string, text: string, packageName: string) {
+  const symbols: RepositoryBrain["symbols"] = [];
+  const imports: string[] = [];
+  const routes: Array<{ path: string; method: string; line: number }> = [];
+  const lines = text.split(/\r?\n/);
+  let decorator: { path: string; method: string; line: number } | undefined;
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index];
+    const imported = line.match(/^\s*(?:from\s+([\w.]+)\s+import|import\s+([\w.]+))/);
+    if (imported) imports.push(imported[1] ?? imported[2]);
+    const route = line.match(/^\s*@\w+\.(get|post|put|patch|delete)\(\s*["']([^"']+)/i);
+    if (route) decorator = { method: route[1].toUpperCase(), path: route[2], line: index + 1 };
+    const declaration = line.match(/^\s*(def|class)\s+(\w+)/);
+    if (declaration) {
+      const kind = declaration[1] === "class" ? "class" : "function";
+      symbols.push({ name: declaration[2], kind, file, packageName, line: index + 1, exported: !declaration[2].startsWith("_"), signature: line.trim(), declaration: line.trim() });
+      if (decorator && kind === "function") { routes.push(decorator); decorator = undefined; }
+    }
+  }
+  return { imports: [...new Set(imports)], symbols, routes };
+}
+function resolvePythonImport(from: string, specifier: string, sourceFiles: Set<string>) {
+  const module = specifier.replace(/^\.+/, "").replace(/\./g, "/");
+  const candidates = [`${module}.py`, `${module}/__init__.py`];
+  const target = candidates.find((candidate) => sourceFiles.has(candidate));
+  return target ? { target, kind: "internal" as const } : { target: specifier, kind: "external" as const };
 }
 export async function discoverPackages(
   root: string,
@@ -153,6 +200,18 @@ function routeFor(file: string, framework: PackageUnit["framework"]) {
     };
   return null;
 }
+
+async function documentationSynopsis(root: string) {
+  try {
+    const content = await fs.readFile(path.join(root, "README.md"), "utf8");
+    const lines = content.split(/\r?\n/).map((line) => line.trim());
+    const title = lines.find((line) => /^#\s+/.test(line))?.replace(/^#\s+/, "");
+    const paragraph = lines.find((line) => line && !line.startsWith("#") && !line.startsWith("<!--") && !line.startsWith("```"));
+    return [title, paragraph].filter(Boolean).join(" — ").slice(0, 500);
+  } catch {
+    return undefined;
+  }
+}
 function resolveImport(
   from: string,
   specifier: string,
@@ -187,6 +246,7 @@ function symbolRows(source: SourceFile, packageName: string, file: string) {
       line: pos,
       exported: node.isExported?.() ?? false,
       signature: signature.slice(0, 240),
+      declaration: signature.slice(0, 16 * 1024),
     });
   };
   source
@@ -353,6 +413,8 @@ export async function compileRepository(
   const symbols: RepositoryBrain["symbols"] = [];
   const routes: RepositoryBrain["routes"] = [];
   const edges: RepositoryBrain["dependencyGraph"] = [];
+  const pendingReferences: Array<{ from: string; symbol: string; line: number; kind: "call" | "reference" | "test" }> = [];
+  const guards: NonNullable<RepositoryBrain["guards"]> = [];
   const diagnostics: RepositoryBrain["diagnostics"] = [];
   let filesSkipped = 0;
   let bytesAnalyzed = 0;
@@ -389,7 +451,7 @@ export async function compileRepository(
     const packageName =
       unit.pkg.name ??
       (unit.relative === "." ? path.basename(discovered.root) : unit.relative);
-    const framework = packageFramework(unit.pkg);
+    const framework = await packageFramework(unit.pkg, unit.absolute);
     const tsconfig = (await fs
       .stat(path.join(unit.absolute, "tsconfig.json"))
       .catch(() => undefined))
@@ -489,6 +551,45 @@ export async function compileRepository(
           message: "reused unchanged analysis",
         });
       } else {
+        if (path.extname(relative) === ".rs") {
+          const parsed = rustFacts(globalPath, text, packageName);
+          const preview = text.split("\n").slice(0, 100).join("\n").slice(0, 8000);
+          files.push({ path: globalPath, packageName, kind: "rs", hash: fileHash, lines: text.split("\n").length, imports: parsed.imports, exports: parsed.symbols.filter((symbol) => symbol.exported).map((symbol) => symbol.name), preview, diagnostics: [], evidence: [evidence(globalPath, "Rust source file discovered within the owning package")] });
+          symbols.push(...parsed.symbols);
+          for (const route of parsed.routes) routes.push({ path: route.path, file: globalPath, packageName, router: "axum", kind: "api", methods: [], evidence: [evidence(globalPath, "matched Axum route convention")] });
+          const testFile = /(?:^|\/)tests?\/|#\[test\]/.test(text);
+          pendingReferences.push(...parsed.calls.filter((call) => !["fn", "if", "for", "match"].includes(call.symbol)).map((call) => ({ from: globalPath, symbol: call.symbol, line: call.line, kind: testFile ? "test" as const : "call" as const })));
+          progress({ phase: "extract", current: index + 1, total, packageName, file: globalPath, message: "analyzed" });
+          continue;
+        }
+        if (path.extname(relative) === ".go") {
+          const parsed = goFacts(globalPath, text, packageName);
+          const preview = text.split("\n").slice(0, 100).join("\n").slice(0, 8000);
+          files.push({ path: globalPath, packageName, kind: "go", hash: fileHash, lines: text.split("\n").length, imports: parsed.imports, exports: parsed.symbols.filter((symbol) => symbol.exported).map((symbol) => symbol.name), preview, diagnostics: [], evidence: [evidence(globalPath, "Go source file discovered within the owning package")] });
+          symbols.push(...parsed.symbols);
+          for (const route of parsed.routes) routes.push({ path: route.path, file: globalPath, packageName, router: "go-net-http", kind: "api", methods: [], evidence: [evidence(globalPath, `matched net/http handler ${route.handler}`)] });
+          const testFile = /_test\.go$/.test(globalPath);
+          pendingReferences.push(...parsed.calls.filter((call) => !["func", "if", "for", "switch"].includes(call.symbol)).map((call) => ({ from: globalPath, symbol: call.symbol, line: call.line, kind: testFile ? "test" as const : "call" as const })));
+          progress({ phase: "extract", current: index + 1, total, packageName, file: globalPath, message: "analyzed" });
+          continue;
+        }
+        if (path.extname(relative) === ".py") {
+          const parsed = extractPythonFacts(globalPath, text, packageName);
+          const preview = text.split("\n").slice(0, 100).join("\n").slice(0, 8000);
+          files.push({ path: globalPath, packageName, kind: "py", hash: fileHash, lines: text.split("\n").length, imports: parsed.imports, exports: parsed.symbols.filter((symbol) => symbol.exported).map((symbol) => symbol.name), preview, diagnostics: [], evidence: [evidence(globalPath, "Python source file discovered within the owning package")] });
+          symbols.push(...parsed.symbols);
+          for (const route of parsed.routes) routes.push({ path: route.path, file: globalPath, packageName, router: "fastapi", kind: "api", methods: [route.method], evidence: [evidence(globalPath, "matched FastAPI decorator convention")] });
+          for (const specifier of parsed.imports) {
+            const resolved = resolvePythonAdapterImport(specifier, sourceSet);
+            edges.push({ from: globalPath, to: resolved.kind === "internal" ? rel(discovered.root, path.join(unit.absolute, resolved.target)) : resolved.target, kind: resolved.kind, packageName, evidence: [evidence(globalPath, `imported ${specifier}`)] });
+          }
+          const testFile = /(?:^|\/)(?:test|tests)\/|^test_.*\.py$/.test(globalPath);
+          for (const call of [...text.matchAll(/\b([A-Za-z_]\w*)\s*\(/g)]) {
+            if (!["def", "class", "if", "for", "while", "return"].includes(call[1])) pendingReferences.push({ from: globalPath, symbol: call[1], line: text.slice(0, call.index).split("\n").length, kind: testFile ? "test" : "call" });
+          }
+          progress({ phase: "extract", current: index + 1, total, packageName, file: globalPath, message: "analyzed" });
+          continue;
+        }
         let source: SourceFile;
         try {
           source = project.addSourceFileAtPath(full);
@@ -500,9 +601,12 @@ export async function compileRepository(
           });
           continue;
         }
-        const imports = source
-          .getImportDeclarations()
-          .map((i) => i.getModuleSpecifierValue());
+        const imports = [...new Set([
+          ...source.getImportDeclarations().map((item) => item.getModuleSpecifierValue()),
+          ...source.getExportDeclarations()
+            .map((item) => item.getModuleSpecifierValue())
+            .filter((item): item is string => Boolean(item)),
+        ])];
         const exports = source.getExportSymbols().map((s) => s.getName());
         const preview = text
           .split("\n")
@@ -526,8 +630,11 @@ export async function compileRepository(
             ),
           ],
         });
-        symbols.push(...symbolRows(source, packageName, globalPath));
-        const route = routeFor(relative, framework);
+        symbols.push(...typeScriptSymbols(source, packageName, globalPath));
+        const relationships = typeScriptRelationships(source, globalPath, text);
+        pendingReferences.push(...relationships.references);
+        guards.push(...relationships.guards);
+        const route = routeForTypeScript(relative, framework);
         if (route) {
           const methods =
             route.kind === "api"
@@ -551,7 +658,7 @@ export async function compileRepository(
           });
         }
         for (const specifier of imports) {
-          const resolved = resolveImport(relative, specifier, sourceSet);
+          const resolved = resolveTypeScriptImport(relative, specifier, sourceSet);
           edges.push({
             from: globalPath,
             to:
@@ -607,7 +714,15 @@ export async function compileRepository(
       (unit.relative === "." ? path.basename(discovered.root) : unit.relative);
     const packageFiles = files.filter((f) => f.packageName === packageName);
     const packageRoutes = routes.filter((r) => r.packageName === packageName);
-    const framework = packageFramework(unit.pkg);
+    const framework = packageFiles.some((file) => file.kind === "rs")
+      ? "rust"
+      : packageFiles.some((file) => file.kind === "go")
+      ? "go"
+      : packageFiles.some((file) => file.kind === "py")
+      ? "python"
+      : unit.pkg?.dependencies?.next || unit.pkg?.devDependencies?.next
+        ? "nextjs"
+        : packageFiles.length ? "typescript" : "unknown";
     return {
       name: packageName,
       rootPath: unit.absolute,
@@ -630,6 +745,40 @@ export async function compileRepository(
       ],
     };
   });
+  const prisma: NonNullable<RepositoryBrain["prisma"]> = [];
+  for (const schema of await fg(["**/*.prisma"], { cwd: discovered.root, ignore: config.ignore, onlyFiles: true })) {
+    const full = path.join(discovered.root, schema);
+    const text = await fs.readFile(full, "utf8");
+    prisma.push(...prismaFacts(rel(discovered.root, full), text));
+  }
+  const facts: NonNullable<RepositoryBrain["facts"]> = [];
+  for (const pkg of packageRows) for (const [name, command] of Object.entries(pkg.scripts as Record<string, string>)) facts.push({ kind: "script", name: `${pkg.name}:${name}`, summary: command, source: pkg.relativePath === "." ? "package.json" : `${pkg.relativePath}/package.json`, line: 1, confidence: "high" });
+  for (const item of prisma) facts.push({ kind: "schema", name: `${item.kind} ${item.name}`, summary: `${item.kind} ${item.name}: ${item.fields.map((field) => `${field.name}: ${field.type}`).join(", ")}`, source: item.file, line: item.line, confidence: "high" });
+  const docPaths = await fg(["README.md", "CONTRIBUTING.md", "docs/**/*.md", "ARCHITECTURE.md"], { cwd: discovered.root, ignore: config.ignore, onlyFiles: true });
+  for (const file of docPaths) {
+    const content = await fs.readFile(path.join(discovered.root, file), "utf8");
+    const rows = content.split(/\r?\n/); const line = Math.max(0, rows.findIndex((row) => /^#\s+/.test(row)));
+    const title = rows[line]?.replace(/^#+\s+/, "").trim() || file;
+    const excerpt = rows.slice(line + 1).find((row) => row.trim() && !row.startsWith("#"))?.trim().slice(0, 500);
+    facts.push({ kind: /^#{1,3}\s*(?:setup|install|quick start)\b/im.test(content) || /README\.md$/i.test(file) ? "setup" : "documentation", name: title, summary: excerpt || "Repository documentation.", source: file, line: line + 1, excerpt, confidence: "high" });
+  }
+  const envPaths = await fg([".env.example", ".env.sample", ".env.template", "**/.env.example", "**/.env.sample", "**/.env.template"], { cwd: discovered.root, ignore: config.ignore, onlyFiles: true });
+  for (const file of envPaths) {
+    const rows = (await fs.readFile(path.join(discovered.root, file), "utf8")).split(/\r?\n/);
+    rows.forEach((row, index) => { const match = row.match(/^\s*([A-Z][A-Z0-9_]+)=(.*)$/); if (match) facts.push({ kind: "environment", name: match[1], summary: `${match[1]} is declared by ${file}${match[2] ? " with a safe example/default marker" : " and requires a value"}.`, source: file, line: index + 1, confidence: "high" }); });
+  }
+  for (const file of files) {
+    if (/(?:^|\/)(?:test|tests)\/|\.(?:test|spec)\.[cm]?[jt]sx?$/.test(file.path)) continue;
+    const text = await fs.readFile(path.join(discovered.root, file.path), "utf8").catch(() => "");
+    if (/^[\"']use server[\"'];?/m.test(text)) {
+      for (const symbol of symbols.filter((symbol) => symbol.file === file.path && symbol.kind === "function" && symbol.exported)) facts.push({ kind: "server-action", name: symbol.name, summary: `Server Action exported by ${file.path}.`, source: file.path, line: symbol.line, confidence: "high" });
+    }
+    if (/\b(?:inngest\.createFunction|new\s+Worker|Worker\s*\()/m.test(text)) facts.push({ kind: "job", name: path.basename(file.path), summary: /inngest\.createFunction/.test(text) ? "Inngest job registration." : "Queue worker registration.", source: file.path, line: 1, confidence: "medium" });
+  }
+  const defined = new Set(symbols.map((symbol) => symbol.name));
+  const references: NonNullable<RepositoryBrain["references"]> = pendingReferences
+    .filter((reference) => defined.has(reference.symbol))
+    .map((reference) => ({ ...reference, to: symbols.find((symbol) => symbol.name === reference.symbol)?.file ?? reference.from, confidence: "high" as const }));
   const trackedFiles = await trackRepository(discovered.root, {
     config,
     excludedPaths: discovered.ignored.map((item) => item.path),
@@ -649,7 +798,12 @@ export async function compileRepository(
       .then(() => "npm")
       .catch(() => "unknown"));
   const brain: RepositoryBrain = {
-    brainVersion: 2,
+    brainVersion: 4,
+    prisma,
+    facts,
+    references,
+    guards,
+    capabilities: [],
     repo: {
       name:
         (await readJson(path.join(discovered.root, "package.json")))?.name ??
@@ -663,6 +817,14 @@ export async function compileRepository(
     compiledAt: new Date().toISOString(),
     fingerprint,
     trackedFiles,
+    semanticIndex: {
+      schemaVersion: 1,
+      status: "absent",
+      coverage: [],
+      blockers: [],
+      unknowns: [],
+      findingCount: 0,
+    },
     status: cancelled
       ? "cancelled"
       : filesSkipped || diagnostics.some((d) => d.severity === "warning")
@@ -686,7 +848,18 @@ export async function compileRepository(
     architectureSummary: `${packageRows.length} package${packageRows.length === 1 ? "" : "s"} analyzed: ${files.length} files, ${symbols.length} symbols, ${routes.length} routes, and ${edges.filter((e) => e.kind === "internal").length} resolved internal edges.`,
     ai: { status: "not-configured" },
   };
+  brain.capabilities = capabilitiesFor(brain);
   brain.memory = reconcileMemory(brain);
+  brain.profile = deriveRepositoryProfile(brain);
+  const synopsis = await documentationSynopsis(discovered.root);
+  if (synopsis && brain.profile) {
+    brain.profile.summary = `${synopsis.replace(/[.\s]+$/, "")}. ${brain.architectureSummary}`;
+    brain.profile.evidence = [
+      { source: "README.md", detail: "repository README title and opening synopsis", confidence: "high" },
+      ...brain.profile.evidence,
+    ];
+    brain.profile.unknowns = brain.profile.unknowns.filter((unknown) => !unknown.includes("purpose"));
+  }
   progress({
     phase: "persist",
     current: 1,

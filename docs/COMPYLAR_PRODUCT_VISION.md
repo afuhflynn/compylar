@@ -27,7 +27,7 @@ Repository Brain
   ↓
 Context Builder
   ↓
-AI Runtime / MCP / CLI / SDK
+AI Runtime / CLI / SDK
   ↓
 Any AI Coding Agent
 ```
@@ -179,9 +179,11 @@ It should support:
 - exporting summaries
 - integrating with local agents
 
-### MCP Server
+### MCP Server (deferred vision)
 
-The MCP server should expose repository intelligence to external agents.
+Compylar does not currently ship an MCP server. Reconsider a read-only MCP
+integration only after the CLI-and-skill workflow proves a genuine need; it
+would expose repository intelligence to external agents.
 
 It should support:
 

@@ -1,103 +1,63 @@
 # Compylar agent integration
 
-Compylar has two complementary integration surfaces:
+Compylar integrates through a portable skill and a concise always-on project
+instruction. The instruction solves the discovery problem: it tells an agent to
+load the detailed skill before it opens files for repository work.
 
-1. A portable skill tells an agent when to check freshness, retrieve memory, and refresh validated changes.
-2. A local read-only MCP server gives the agent structured Brain, status, memory, and task-context queries.
+## Recommended setup
 
-Install the skill first. Add MCP only after reviewing the exact configuration. Neither surface needs an OpenAI API key for deterministic operation.
-
-## Safe install contract
-
-`compylar install-agent` is intentionally conservative:
-
-- It requires an explicit `--agent` and supports only `--scope project`.
-- It previews by default; `--apply` is required to copy files.
-- It refuses to overwrite an existing skill.
-- It never writes a home-directory configuration, an `AGENTS.md`/`CLAUDE.md`, or MCP configuration.
-
-The project scope is deliberate: it is reviewable in source control and does not unexpectedly affect unrelated repositories. User/global installation and automatic agent detection are deferred until their paths and rollback behavior have fixture coverage.
-
-## Codex
-
-From the repository root:
+From the target repository, preview the changes first and then apply them:
 
 ```bash
-compylar install-agent . --agent codex --scope project
-compylar install-agent . --agent codex --scope project --apply
+compylar setup-agent . --agent codex
+compylar setup-agent . --agent codex --apply
 ```
 
-This copies the skill to `.agents/skills/compylar/`, the repository skill location Codex scans. The skill's description is designed to trigger for unfamiliar repositories, codebase questions, planning, debugging, and post-change memory updates.
+`setup-agent` installs the portable skill and a short project trigger:
 
-To add the optional project-scoped MCP server, review and merge this into `.codex/config.toml`; replace the absolute path with the repository root:
+| Agent | Skill location | Trigger file |
+| --- | --- | --- |
+| Codex | `.agents/skills/compylar/` | `AGENTS.md` |
+| Claude Code | `.claude/skills/compylar/` | `CLAUDE.md` |
+| OpenCode | `.agents/skills/compylar/` | `.opencode/AGENTS.md` |
 
-```toml
-[mcp_servers.compylar]
-command = "compylar"
-args = ["mcp", "."]
-cwd = "/absolute/path/to/repository"
-startup_timeout_sec = 10
-tool_timeout_sec = 60
-```
+Use `--agent claude` or `--agent opencode` for those agents. The command is
+project-scoped, previews by default, and refuses to overwrite either an existing
+skill or an existing instruction file. When a project already has guidance,
+merge the displayed Compylar trigger manually.
 
-Alternatively, `codex mcp add compylar -- compylar mcp .` adds a user-level CLI configuration. Compylar does not run that command because a user-level setting affects more than one repository.
+`install-agent` remains available for teams that intentionally want only the
+portable skill and will manage their project instruction file themselves.
 
-## Claude Code
+## First-time repository behavior
 
-From the repository root:
+Users should use ordinary prompts, such as “what does this project do?” or
+“implement two-factor authentication.” They should not have to ask the agent to
+index, remember, refresh, or use a Brain.
 
-```bash
-compylar install-agent . --agent claude --scope project
-compylar install-agent . --agent claude --scope project --apply
-```
-
-This copies the skill to `.claude/skills/compylar/`, where Claude Code discovers project skills. Then, if the team wants the read-only MCP tools, add its reviewable project configuration using Claude Code's own CLI:
-
-```bash
-claude mcp add --transport stdio --scope project compylar -- compylar mcp .
-```
-
-Claude Code writes the shared entry to `.mcp.json` and prompts each user to approve a project-scoped server. That approval is intentional: a cloned repository must not silently enable a local process.
-
-## OpenCode
-
-From the repository root:
-
-```bash
-compylar install-agent . --agent opencode --scope project
-compylar install-agent . --agent opencode --scope project --apply
-```
-
-This copies the portable skill to `.agents/skills/compylar/`, a project skill location OpenCode discovers. To add the optional local MCP server, review and merge this into `opencode.json` at the repository root; replace the absolute path with the repository root:
-
-```json
-{
-  "$schema": "https://opencode.ai/config.json",
-  "mcp": {
-    "compylar": {
-      "type": "local",
-      "command": ["compylar", "mcp", "."],
-      "cwd": "/absolute/path/to/repository",
-      "enabled": true
-    }
-  }
-}
-```
-
-OpenCode gives the model access to configured MCP tools. Keep Compylar's read-only tool set enabled only when you want it available in the current agent workflow.
-
-## Runtime workflow
-
-The skill guides agents through this sequence:
+When no semantic Brain exists, the installed skill requires this sequence before
+feature work:
 
 ```text
-status → compile if missing / refresh if stale → context or memory → targeted source reads → meaningful tests → status → refresh
+bootstrap → deterministic compile → bundled codebase index → cited manifest ingest
 ```
 
-MCP is read-only. `compile` and `refresh` remain explicit CLI actions because they update repository state. Source files are still read when implementation needs details that the evidence-backed memory cannot prove.
+Give `bootstrap`, `compile`, and `refresh` at least ten minutes of agent command
+time. If a command is interrupted, retry with a larger allowance and use
+`compylar compile . --resume --no-ai` when a checkpoint exists.
+
+With a current Brain, an agent uses `status`, `overview`, `memory`, or `context`
+before broad source reads. It reads source only for a named evidence gap or an
+exact edit range. After validated deeper work or meaningful changes, it records
+cited reusable findings, runs `sync`, and refreshes affected memory.
 
 ## Verification
 
-After setup, start a fresh agent session and ask for a concrete task such as “explain the authentication flow.” The agent should use Compylar status/context/memory first, state any unknowns, and avoid broad repository discovery when a current Brain exists.
+Start a fresh agent session and ask a broad question, then a concrete task. A
+correctly configured agent starts from Compylar evidence, surfaces genuine
+unknowns, avoids broad rediscovery, and preserves validated discoveries for the
+next session.
 
-Run `compylar doctor .` to confirm local baseline prerequisites, then `compylar mcp-health .` to verify Compylar's protocol responses and tool discovery. The health check does not connect an external agent; use your agent's MCP panel or command to verify its separate configuration and project-trust approval.
+Compylar does not claim to bypass an agent's permission or command-approval
+policy. The agent still decides whether it is allowed to run a command or edit a
+file.

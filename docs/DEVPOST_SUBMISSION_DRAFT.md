@@ -20,7 +20,7 @@ Compylar is local, persistent repository memory for coding agents. It compiles a
 
 The key workflow is freshness-first. Compylar detects additions, changes, and deletions across source, documentation, configuration, manifests, and lockfiles. When knowledge is stale, `refresh` reuses unchanged analysis and reconciles memory by stable IDs and source fingerprints. It shows exactly which chunks changed and which were reused.
 
-Compylar’s deterministic core works without an API key. Optional AI enrichment is constrained to verified candidates and cannot invent repository facts. The CLI, portable agent skill, concise project guidance, and read-only MCP tools give agents a practical contract: check freshness, retrieve evidence, read source only when needed, validate changes, then refresh memory.
+Compylar’s deterministic core works without an API key. Optional AI enrichment is constrained to verified candidates and cannot invent repository facts. The CLI, portable agent skill, and concise project guidance give agents a practical contract: check freshness, retrieve evidence, read source only when needed, validate changes, then refresh memory.
 
 Built with Codex and GPT-5.6 during OpenAI Build Week. The submission evidence includes the primary Codex `/feedback` Session ID, dated repository history, and the demo below.
 
@@ -31,7 +31,6 @@ pnpm install
 pnpm build
 pnpm demo
 pnpm benchmark
-compylar mcp-health .
 ```
 
 `pnpm demo` runs against a temporary fixture copy and proves compile → context → changed-path detection → refresh. `pnpm benchmark` reports selected files, changed paths, reused memory chunks, and elapsed operations. No OpenAI API key is required for either command.

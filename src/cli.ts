@@ -22,14 +22,15 @@ import {
   memoryRefreshSummary,
 } from "./analytics.js";
 import { createProgressController, type ProgressMode } from "./progress.js";
-import { repositoryLookup, repositoryRefresh, repositoryRoutes, repositoryStatus } from "./services.js";
-import { runMcpServer } from "./mcp.js";
+import { reconcileSemanticIndex, repositoryBootstrap, repositoryCommitMemory, repositoryCompileDiff, repositoryFacts, repositoryIngestIndex, repositoryLearn, repositoryLearned, repositoryLookup, repositoryMemoryReview, repositoryOverview, repositoryReferences, repositoryRefresh, repositoryRoutes, repositoryStatus, repositorySync, repositorySystems } from "./services.js";
 import { COMPYLAR_VERSION } from "./version.js";
 import { loadConfig } from "./config.js";
-import { checkMcpHealth } from "./mcp-health.js";
+import { reconcileLearnedMemory, reconcileMemory } from "./memory.js";
 import {
   applyAgentInstall,
+  applyAgentSetup,
   createAgentInstallPlan,
+  createAgentSetupPlan,
   supportedAgents,
   type SupportedAgent,
 } from "./agent-install.js";
@@ -65,34 +66,69 @@ const program = new Command()
   .description("Compile trustworthy repository knowledge for AI coding agents")
   .version(COMPYLAR_VERSION)
   .showSuggestionAfterError();
-program
-  .command("mcp")
-  .description("Run the read-only Compylar MCP server over stdio")
-  .argument("[path]", "repository scope", ".")
-  .action(async (value) => {
-    await runMcpServer(rootOf(value));
-  });
 outputOptions(
   program
-    .command("mcp-health")
-    .description("Verify Compylar's MCP protocol contract")
-    .argument("[path]", "repository scope", "."),
+    .command("bootstrap")
+    .description("Create a local baseline and return the required agent-led semantic indexing workflow")
+    .argument("[path]", "repository path", "."),
 ).action(async (value, options) => {
-  const result = await checkMcpHealth(rootOf(value));
+  const result = await repositoryBootstrap(rootOf(value), { ai: false, progress: false });
   print(result, options.json, () => {
-    console.log(
-      result.status === "healthy"
-        ? chalk.green("MCP server is healthy.")
-        : chalk.red("MCP protocol health check failed."),
-    );
-    if (result.server)
-      console.log(`Server: ${result.server.name}@${result.server.version}`);
-    if (result.tools) console.log(`Tools (${result.tools.length}): ${result.tools.join(", ")}`);
-    console.log(`Handshake: ${result.elapsedMs.toFixed(1)}ms`);
-    if (result.error) console.log(`Error: ${result.error}`);
-    console.log(`Next: ${result.action}`);
+    console.log(result.message);
+    console.log(`Next: ${result.nextAction}`);
+    console.log(`Required memory: ${result.requiredFindings.join(", ")}`);
   });
-  if (result.status !== "healthy") process.exitCode = 1;
+});
+outputOptions(
+  program
+    .command("setup-agent")
+    .description("Preview or install the Compylar skill plus a short always-on project trigger")
+    .argument("[path]", "repository path", ".")
+    .requiredOption("--agent <agent>", "agent: codex, claude, or opencode")
+    .option("--scope <scope>", "installation scope (project only)", "project")
+    .option("--replace-skill", "replace an existing skill after saving a timestamped backup")
+    .option("--apply", "install after showing the explicit plan"),
+).action(async (value, options) => {
+  if (!supportedAgents.includes(options.agent as SupportedAgent)) throw new Error(`Unsupported agent ${JSON.stringify(options.agent)}. Choose one of: ${supportedAgents.join(", ")}.`);
+  if (options.scope !== "project") throw new Error("Only project scope is supported.");
+  const plan = await createAgentSetupPlan({ root: rootOf(value), agent: options.agent as SupportedAgent, scope: "project" });
+  const result = options.apply ? await applyAgentSetup(plan, options.replaceSkill === true) : plan;
+  print(result, options.json, () => {
+    console.log(`Skill: ${result.state} → ${result.destination}`);
+    console.log(`Always-on trigger: ${result.instruction.state} → ${result.instruction.destination}`);
+    if (result.instruction.state === "conflict") console.log("No files changed: merge the trigger into the existing instruction file manually.");
+    else if (!options.apply) console.log("No files changed: run again with --apply after reviewing the plan.");
+  });
+});
+outputOptions(
+  program
+    .command("sync")
+    .description("Plan the smallest trustworthy agent re-index scope for stale repository memory")
+    .argument("[path]", "repository path", "."),
+).action(async (value, options) => {
+  const result = await repositorySync(rootOf(value));
+  print(result, options.json, () => {
+    console.log(`Sync action: ${result.action}`);
+    if ("reason" in result) console.log(result.reason);
+    if (result.changedPaths.length) console.log(`Changed: ${result.changedPaths.join(", ")}`);
+    if (result.affectedPaths.length) console.log(`Inspect: ${result.affectedPaths.join(", ")}`);
+    if (result.requiredFindings.length) console.log(`Update memory: ${result.requiredFindings.join(", ")}`);
+  });
+});
+outputOptions(
+  program
+    .command("overview")
+    .description("Return the compact deterministic repository profile")
+    .argument("[path]", "repository path", "."),
+).action(async (value, options) => {
+  const overview = await repositoryOverview(rootOf(value));
+  print(overview, options.json, () => {
+    console.log(overview.summary);
+    console.log(`\nStack: ${overview.stack.join(", ") || "not deterministically identified"}`);
+    console.log("\nDirectories:");
+    for (const directory of overview.directories) console.log(`  ${directory.path}: ${directory.purpose}`);
+    if (overview.unknowns.length) console.log(`\nUnknowns: ${overview.unknowns.join(" ")}`);
+  });
 });
 program
   .command("init")
@@ -111,6 +147,8 @@ outputOptions(
     .argument("[path]", "repository path", ".")
     .requiredOption("--agent <agent>", "agent: codex, claude, or opencode")
     .option("--scope <scope>", "installation scope (project only)", "project")
+    .option("--check", "compare the bundled skill with an existing destination")
+    .option("--replace", "replace an existing skill after saving a timestamped backup")
     .option("--apply", "copy the skill after showing the explicit plan"),
 ).action(async (value, options) => {
   if (!supportedAgents.includes(options.agent as SupportedAgent)) {
@@ -128,7 +166,8 @@ outputOptions(
     agent: options.agent as SupportedAgent,
     scope: "project",
   });
-  const result = options.apply ? await applyAgentInstall(plan) : plan;
+  if (options.replace && !options.apply) throw new Error("--replace requires --apply.");
+  const result = options.apply ? await applyAgentInstall(plan, options.replace === true) : plan;
   print(result, options.json, () => {
     console.log(
       result.state === "installed"
@@ -139,11 +178,12 @@ outputOptions(
     );
     console.log(`Source: ${result.source}`);
     console.log(`Destination: ${result.destination}`);
+    if ("comparison" in result && result.comparison) console.log(`Existing skill: ${result.comparison}`);
+    if ("backupPath" in result && result.backupPath) console.log(`Previous skill backed up to: ${result.backupPath}`);
     if (result.state === "ready")
       console.log("Run again with --apply to copy this skill.");
     if (result.state === "conflict")
       console.log("Remove or rename the existing skill yourself before applying.");
-    console.log(`\n${result.mcp.guidance}`);
   });
 });
 
@@ -172,6 +212,7 @@ compileOptions(
     );
   });
   try {
+    const previous = await loadBrain(root).catch(() => undefined);
     const brain = await compileRepository(root, {
       ai: options.ai === false ? false : undefined,
       resume: Boolean(options.resume),
@@ -183,6 +224,14 @@ compileOptions(
       timeoutMs: numeric(options.timeout),
       signal: controller.signal,
     });
+    if (previous) {
+      brain.memory = reconcileMemory(brain, previous.memory);
+      brain.learnedMemory = {
+        schemaVersion: 1,
+        findings: reconcileLearnedMemory(brain, previous.learnedMemory?.findings),
+      };
+      brain.semanticIndex = reconcileSemanticIndex(brain, previous.semanticIndex);
+    }
     if (brain.status !== "cancelled") await saveBrain(root, brain);
     progressController.complete();
     print(brain, options.json, () => {
@@ -201,6 +250,21 @@ compileOptions(
   } finally {
     progressController.dispose();
   }
+});
+outputOptions(
+  program
+    .command("ingest-index")
+    .description("Validate and ingest the bundled codebase-index semantic manifest")
+    .argument("[path]", "repository path", ".")
+    .option("--manifest <path>", "semantic manifest path (defaults to .compylar/semantic-index.json)"),
+).action(async (value, options) => {
+  const result = await repositoryIngestIndex(rootOf(value), options.manifest);
+  print(result, options.json, () => {
+    console.log(`Semantic memory: ${result.status}`);
+    console.log(`Findings: ${result.created} created · ${result.reused} reused`);
+    console.log(`Coverage: ${result.coverage.join(", ")}`);
+    if (result.blockers.length) console.log(`Blockers: ${result.blockers.join("; ")}`);
+  });
 });
 compileOptions(
   program
@@ -270,6 +334,91 @@ brainCommand.action(async (value, options) => {
     console.log(brainReport(brain, options));
   });
 });
+function parseCitation(value: string) {
+  const match = value.match(/^(.*):(\d+)(?:-(\d+))?$/);
+  if (!match) throw new Error("Source citation must be path:startLine-endLine (for example lib/auth.ts:10-34).");
+  return { path: match[1], startLine: Number(match[2]), endLine: Number(match[3] ?? match[2]) };
+}
+function learningCommand(name: "learn" | "remember", authority: "agent" | "human") {
+  return outputOptions(
+    program.command(name)
+      .description(authority === "human" ? "Record a human-authoritative repository decision or note" : "Record a cited, durable repository discovery")
+      .argument("<summary>", "concise durable finding")
+      .argument("[path]", "repository path", ".")
+      .requiredOption("--kind <kind>", "flow, system, constraint, convention, gotcha, decision, task-outcome, or unknown")
+      .option("--source <citation...>", "source citation path:startLine-endLine; required for agent learning")
+      .option("--question <question>", "question that led to this finding")
+      .option("--confidence <confidence>", "high, medium, or low")
+      .option("--system <name...>", "architecture system(s) this fact belongs to")
+      .option("--key <key>", "stable key; supersedes the current fact with the same key"),
+  ).action(async (summary, value, options) => {
+    const kinds = ["flow", "system", "constraint", "convention", "gotcha", "decision", "task-outcome", "unknown"] as const;
+    if (!kinds.includes(options.kind)) throw new Error(`Learning kind must be one of: ${kinds.join(", ")}.`);
+    if (options.confidence && !["high", "medium", "low"].includes(options.confidence)) throw new Error("Confidence must be high, medium, or low.");
+    const finding = await repositoryLearn(rootOf(value), {
+      kind: options.kind,
+      summary,
+      authority,
+      sources: (options.source ?? []).map(parseCitation),
+      originQuestion: options.question,
+      confidence: options.confidence,
+      systems: options.system,
+      stableKey: options.key,
+    });
+    print(finding, options.json, () => console.log(`Recorded ${finding.kind} memory: ${finding.id}`));
+  });
+}
+learningCommand("learn", "agent");
+learningCommand("remember", "human");
+outputOptions(
+  program.command("memory-review")
+    .description("Prepare the required durable-memory review after deep repository work")
+    .argument("<task>", "work that was investigated or implemented")
+    .argument("[path]", "repository path", ".")
+    .option("--files <paths...>", "source files read during deep work")
+    .option("--changed <paths...>", "source files changed during work"),
+).action(async (task, value, options) => {
+  const result = await repositoryMemoryReview(rootOf(value), task, options.files ?? [], options.changed ?? []);
+  print(result, options.json, () => {
+    console.log(`Memory review: ${result.requiresReview ? "required" : "not required"}`);
+    console.log(`Systems: ${result.systems.join(", ") || "none yet"}`);
+    console.log(`Uncovered: ${result.uncovered.join(", ") || "none"}`);
+    console.log("Commit a cited manifest with: compylar commit-memory . --manifest <path>");
+  });
+});
+outputOptions(
+  program.command("commit-memory")
+    .description("Validate and atomically persist a cited post-work memory delta")
+    .argument("[path]", "repository path", ".")
+    .requiredOption("--manifest <path>", "JSON manifest from memory-review"),
+).action(async (value, options) => {
+  const raw = JSON.parse(await fs.readFile(options.manifest, "utf8"));
+  const result = await repositoryCommitMemory(rootOf(value), raw);
+  print(result, options.json, () => console.log(`Committed ${result.committed} durable memory record(s) for: ${result.task}`));
+});
+outputOptions(
+  program.command("systems")
+    .description("List current system-scoped architecture memory")
+    .argument("[path]", "repository path", ".")
+    .option("--query <term>", "filter system name"),
+).action(async (value, options) => {
+  const result = await repositorySystems(rootOf(value), options.query);
+  print(result, options.json, () => {
+    if (!result.length) console.log("No system-scoped architecture memory exists yet.");
+    for (const system of result) console.log(`${system.name}: ${system.findings.length} finding(s) · ${system.coverage.join(", ") || "no coverage"}`);
+  });
+});
+function factCommand(name: "setup" | "env" | "schema" | "jobs" | "actions", kinds: Parameters<typeof repositoryFacts>[1]) {
+  return outputOptions(program.command(name).description(`List verified ${name} facts without reopening source files`).argument("[path]", "repository path", ".").option("--query <term>", "filter facts")).action(async (value, options) => {
+    const result = await repositoryFacts(rootOf(value), kinds, options.query);
+    print(result, options.json, () => result.length ? result.forEach((fact) => console.log(`${fact.name}\n  ${fact.summary}\n  ${fact.source}:${fact.line}`)) : console.log(`No verified ${name} facts matched.`));
+  });
+}
+factCommand("setup", ["setup", "documentation"]);
+factCommand("env", ["environment"]);
+factCommand("schema", ["schema"]);
+factCommand("jobs", ["job"]);
+factCommand("actions", ["server-action"]);
 outputOptions(
   program
     .command("analytics")
@@ -287,9 +436,17 @@ outputOptions(
     .command("memory")
     .description("Look up compact, evidence-backed repository facts")
     .argument("<query>", "symbol, route, module, or memory query")
-    .argument("[path]", "repository path", "."),
+    .argument("[path]", "repository path", ".")
+    .option("--exact", "return exact matches only")
+    .option("--kind <kind>", "symbol, prisma, learned, memory, route, or fact")
+    .option("--limit <number>", "maximum results", "8")
+    .option("--full", "include bounded stored declarations"),
 ).action(async (query, value, options) => {
-  const result = await repositoryLookup(rootOf(value), query);
+  const limit = Number(options.limit);
+  if (!Number.isInteger(limit) || limit <= 0) throw new Error("Memory limit must be a positive integer.");
+  const kinds = ["symbol", "prisma", "learned", "memory", "route", "fact"] as const;
+  if (options.kind && !kinds.includes(options.kind)) throw new Error(`Memory kind must be one of: ${kinds.join(", ")}.`);
+  const result = await repositoryLookup(rootOf(value), query, undefined, { exact: options.exact === true, kind: options.kind, limit, full: options.full === true });
   print(result, options.json, () => {
     if (!result.matches.length) {
       console.log(`No evidence-backed memory matched ${JSON.stringify(query)}.`);
@@ -301,6 +458,41 @@ outputOptions(
       console.log(`  ${match.source}${match.line ? `:${match.line}` : ""} · ${match.confidence} confidence`);
     }
   });
+});
+outputOptions(
+  program.command("learned")
+    .description("List and audit durable learned repository findings")
+    .argument("[path]", "repository path", ".")
+    .option("--query <text>", "filter finding id, kind, or summary")
+    .option("--state <state>", "current, stale, superseded, or archived")
+    .option("--limit <number>", "maximum findings", "40"),
+).action(async (value, options) => {
+  const limit = Number(options.limit);
+  if (!Number.isInteger(limit) || limit <= 0) throw new Error("Learned limit must be a positive integer.");
+  const states = ["current", "stale", "superseded", "archived"] as const;
+  if (options.state && !states.includes(options.state)) throw new Error(`Learned state must be one of: ${states.join(", ")}.`);
+  const findings = await repositoryLearned(rootOf(value), { query: options.query, state: options.state, limit });
+  print(findings, options.json, () => findings.forEach((finding) => console.log(`${finding.id}\n  ${finding.state} · ${finding.summary}`)));
+});
+outputOptions(
+  program.command("references")
+    .description("Show proven callers, tests, and guards for an exact symbol")
+    .argument("<symbol>", "exact symbol name")
+    .argument("[path]", "repository path", "."),
+).action(async (symbol, value, options) => {
+  const result = await repositoryReferences(rootOf(value), symbol);
+  print(result, options.json, () => console.log(JSON.stringify(result, null, 2)));
+});
+outputOptions(
+  program.command("compile-diff")
+    .description("Compare two stored Repository Brain snapshots without rereading source")
+    .argument("[path]", "repository path", ".")
+    .option("--from <id>", "older snapshot id")
+    .option("--to <id>", "newer snapshot id"),
+).action(async (value, options) => {
+  const number = (input: string | undefined) => input === undefined ? undefined : Number(input);
+  const result = await repositoryCompileDiff(rootOf(value), number(options.from), number(options.to));
+  print(result, options.json, () => console.log(JSON.stringify(result, null, 2)));
 });
 outputOptions(
   program

@@ -15,7 +15,7 @@ Verified on 2026-07-19 from the official [Devpost rules](https://openai.devpost.
 ## Submission package
 
 1. Run `pnpm typecheck`, `pnpm test`, `pnpm build`, `pnpm demo`, `pnpm benchmark`, and `pnpm verify:cli-bin` on the final revision.
-2. Ensure the README contains installation, deterministic no-key workflow, optional AI boundary, agent skill/MCP instructions, and judge-ready testing commands.
+2. Ensure the README contains installation, deterministic no-key workflow, optional AI boundary, agent-skill setup, and judge-ready testing commands.
 3. Record the three-minute video using the existing demo flow: problem → compile → targeted context → change/status → refresh reuse → close.
 4. In the video and description, state that Compylar was built with Codex/GPT-5.6 and explain the evidence-backed, no-key deterministic core.
 5. Add the public repository URL, YouTube URL, track, text description, and `/feedback` Session ID to Devpost.

@@ -21,6 +21,7 @@ export type CompileAnalytics = {
   aiStatus: RepositoryBrain["ai"]["status"];
   durationMs: number;
   compiledAt: string;
+  semanticIndexStatus: NonNullable<RepositoryBrain["semanticIndex"]>["status"];
 };
 
 export type BrainReportOptions = {
@@ -49,6 +50,7 @@ export function buildAnalytics(brain: RepositoryBrain): CompileAnalytics {
     aiStatus: brain.ai.status,
     durationMs: brain.analysis.durationMs,
     compiledAt: brain.compiledAt,
+    semanticIndexStatus: brain.semanticIndex?.status ?? "absent",
   };
 }
 
@@ -80,6 +82,7 @@ export function analyticsTable(brain: RepositoryBrain): string {
     ["Diagnostics", analytics.diagnostics],
     ["Ignored projects", analytics.ignored],
     ["AI enrichment", aiStatusMessage(brain)],
+    ["Semantic index", `${analytics.semanticIndexStatus} · ${brain.semanticIndex?.findingCount ?? 0} validated findings`],
     ["Duration", `${(analytics.durationMs / 1000).toFixed(1)}s`],
   );
   return table.toString();
@@ -94,6 +97,7 @@ export function conciseSummary(brain: RepositoryBrain): string {
     `Analyzed ${analytics.filesAnalyzed}/${analytics.filesDiscovered} files · ${analytics.symbols} symbols · ${analytics.internalEdges} internal edges · ${analytics.routes} routes`,
     `Skipped: ${analytics.filesSkipped} files · ${formatBytes(analytics.bytesAnalyzed)}`,
     memoryRefreshSummary(brain),
+    `Semantic index: ${analytics.semanticIndexStatus} · ${brain.semanticIndex?.findingCount ?? 0} validated findings`,
     analytics.diagnostics ? chalk.yellow(`Diagnostics: ${analytics.diagnostics}`) : "Diagnostics: none",
     "Next: compylar brain .  |  compylar context \"describe your task\" .",
   ].join("\n");
@@ -203,6 +207,7 @@ export function brainReport(brain: RepositoryBrain, options: BrainReportOptions 
     `  Packages: ${metrics.packages}`,
     `  Source files: ${metrics.filesAnalyzed}`,
     `  Memory chunks: ${brain.memory?.chunks.length ?? 0}`,
+    `  Semantic index: ${brain.semanticIndex?.status ?? "absent"} · ${brain.semanticIndex?.findingCount ?? 0} validated findings`,
     `  Memory refresh: ${brain.memory ? `${brain.memory.changes.created.length} created · ${brain.memory.changes.updated.length} updated · ${brain.memory.changes.reused.length} reused · ${brain.memory.changes.removed.length} removed` : "unavailable in legacy Brain"}`,
     `  Symbols: ${metrics.symbols}`,
     `  Routes: ${metrics.routes}`,

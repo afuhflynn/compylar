@@ -4,7 +4,9 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   applyAgentInstall,
+  applyAgentSetup,
   createAgentInstallPlan,
+  createAgentSetupPlan,
 } from "../agent-install.js";
 
 async function fixtureSkill(root: string) {
@@ -68,7 +70,6 @@ describe("agent installation", () => {
       agent: "opencode",
       destination: path.join(root, ".agents", "skills", "compylar"),
     });
-    expect(plan.mcp.guidance).toMatch(/opencode\.json/i);
   });
 
   it("refuses to overwrite an existing agent skill", async () => {
@@ -87,4 +88,18 @@ describe("agent installation", () => {
     expect(plan.state).toBe("conflict");
     await expect(applyAgentInstall(plan)).rejects.toThrow(/already exists/i);
   });
+});
+
+it("previews and applies a separate always-on trigger without overwriting existing instructions", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "compylar-agent-"));
+  const sourceRoot = await fixtureSkill(root);
+  const plan = await createAgentSetupPlan({ root, agent: "codex", scope: "project", sourceRoot });
+  expect(plan.instruction.destination).toBe(path.join(root, "AGENTS.md"));
+  expect(plan.instruction.state).toBe("ready");
+  const result = await applyAgentSetup(plan);
+  expect(result.instruction.state).toBe("installed");
+  await expect(access(path.join(root, "AGENTS.md"))).resolves.toBeUndefined();
+  await writeFile(path.join(root, "AGENTS.md"), "existing\n");
+  const conflict = await createAgentSetupPlan({ root, agent: "codex", scope: "project", sourceRoot });
+  expect(conflict.instruction.state).toBe("conflict");
 });

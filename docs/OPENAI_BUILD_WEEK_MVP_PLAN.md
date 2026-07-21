@@ -44,7 +44,6 @@ We will measure that through observable proxies, not unsupported token claims:
 - [x] `refresh` recompiles with unchanged-source reuse.
 - [x] Typed memory chunks with stable IDs, evidence, source fingerprints, and targeted reconciliation.
 - [x] Deterministic context packs with relevant memory chunks.
-- [x] Read-only MCP for Brain, status, memory, context, routes, dependencies, and analytics.
 - [x] Portable Compylar agent skill and repository `AGENTS.md` workflow.
 - [x] Deterministic default; optional OpenAI enrichment has non-secret provider/model/mode config.
 
@@ -52,7 +51,7 @@ We will measure that through observable proxies, not unsupported token claims:
 
 ### In scope
 
-- Local CLI and read-only MCP.
+- Local CLI and portable agent skill.
 - TypeScript/JavaScript repositories and the included Next.js/workspace fixtures.
 - Evidence-backed retrieval and explicit unknowns.
 - Agent onboarding through skills and concise project guidance.
@@ -65,7 +64,6 @@ We will measure that through observable proxies, not unsupported token claims:
 - Multi-language semantic analysis beyond the current JavaScript/TypeScript scope.
 - Full semantic dependency invalidation or background indexing.
 - Secret storage, credential provisioning, or automatic AI spending.
-- Automatic writes through MCP.
 
 ## Agent contract
 
@@ -78,7 +76,7 @@ Compylar is not an authority to modify code. It gives agents a low-cost, verifia
 5. Make and validate the change.
 6. Refresh repository memory after meaningful validated changes.
 
-MCP remains read-only. The CLI owns repository writes; the coding agent and user retain approval and mutation control.
+The CLI owns repository writes; the coding agent and user retain approval and mutation control.
 
 ## AI and credential policy
 
@@ -107,7 +105,7 @@ Run `compylar compile examples/nextjs-demo --no-ai`. Show the Brain summary: pac
 
 ### 0:55–1:25 — retrieve, do not rediscover
 
-Run `compylar context "add authentication to the dashboard" examples/nextjs-demo --json` or call the MCP context tool. Show selected evidence, reusable memory chunks, exclusions, and explicit unknowns.
+Run `compylar context "add authentication to the dashboard" examples/nextjs-demo --json`. Show selected evidence, reusable memory chunks, exclusions, and explicit unknowns.
 
 ### 1:25–2:00 — change and detect
 
@@ -127,7 +125,7 @@ Run `compylar refresh examples/nextjs-demo --no-ai`, then inspect `compylar brai
 - [ ] Run `pnpm typecheck`, `pnpm test`, and `pnpm build` on the submission revision.
 - [ ] Run the demo from a clean state and capture exact commands/output.
 - [ ] Record a video under the event limit.
-- [ ] Publish a README with install, no-key deterministic workflow, optional AI policy, and MCP/skill setup.
+- [ ] Publish a README with install, no-key deterministic workflow, optional AI policy, and agent-skill setup.
 - [ ] Include the public repository and required Codex session/feedback evidence.
 - [ ] Write a short description centered on durable repository memory and targeted refresh.
 

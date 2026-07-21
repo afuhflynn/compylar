@@ -20,6 +20,37 @@ export function checkpointPath(root: string) {
 function brainMarkdown(brain: RepositoryBrain) {
   return brainReport(brain) + "\n";
 }
+
+/** Normalizes historical Brain snapshots before strict schema validation. */
+function migrateBrain(raw: unknown): unknown {
+  if (!raw || typeof raw !== "object") return raw;
+  const legacy = raw as Record<string, unknown>;
+  const files = Array.isArray(legacy.files) ? legacy.files : [];
+  const diagnostics = Array.isArray(legacy.diagnostics) ? legacy.diagnostics : [];
+  if (legacy.brainVersion !== 2 && legacy.brainVersion !== 3 && legacy.brainVersion !== 4) return raw;
+  return {
+    ...legacy,
+    brainVersion: 4,
+    semanticIndex: legacy.semanticIndex ?? {
+      schemaVersion: 1,
+      status: "absent",
+      coverage: [],
+      blockers: [],
+      unknowns: [],
+      findingCount: 0,
+    },
+    status: legacy.status ?? "complete",
+    analysis: legacy.analysis ?? {
+      filesDiscovered: files.length,
+      filesAnalyzed: files.length,
+      filesSkipped: 0,
+      bytesAnalyzed: 0,
+      durationMs: 0,
+      limits: { maxFiles: 25_000, maxFileSize: 1_048_576, maxTotalBytes: 262_144_000 },
+    },
+    diagnostics,
+  };
+}
 export async function saveConfig(root: string) {
   await mkdir(stateDir(root), { recursive: true });
   await writeFile(
@@ -88,7 +119,7 @@ export async function loadBrain(root: string): Promise<RepositoryBrain> {
     );
   }
   try {
-    return BrainSchema.parse(JSON.parse(raw));
+    return BrainSchema.parse(migrateBrain(JSON.parse(raw)));
   } catch (error) {
     throw new Error(
       `Compiled knowledge is corrupt or from an unsupported schema in ${brainPath(root)}. Run: compylar compile ${root}. Details: ${error instanceof Error ? error.message : String(error)}`,
@@ -108,4 +139,12 @@ export async function listSnapshots(root: string) {
   } catch {
     return [];
   }
+}
+export async function loadSnapshot(root: string, id: number): Promise<RepositoryBrain | undefined> {
+  try {
+    const db = new DatabaseSync(databasePath(root));
+    const row = db.prepare("SELECT brain_json as brainJson FROM snapshots WHERE id = ?").get(id) as { brainJson?: string } | undefined;
+    db.close();
+    return row?.brainJson ? BrainSchema.parse(migrateBrain(JSON.parse(row.brainJson))) : undefined;
+  } catch { return undefined; }
 }

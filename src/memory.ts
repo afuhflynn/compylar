@@ -1,5 +1,5 @@
 import crypto from "node:crypto";
-import { Evidence, MemoryChunk, RepositoryBrain, RepositoryMemory } from "./types.js";
+import { Evidence, LearnedFinding, MemoryChunk, RepositoryBrain, RepositoryMemory, RepositoryProfile } from "./types.js";
 
 type DraftChunk = Omit<MemoryChunk, "createdAt" | "updatedAt" | "lastVerifiedAt">;
 
@@ -84,18 +84,25 @@ function deriveChunks(brain: RepositoryBrain): DraftChunk[] {
     );
     const edges = brain.dependencyGraph.filter((edge) => edge.from === file.path);
     if (edges.length) {
+      const internalTargets = edges.filter((edge) => edge.kind === "internal").map((edge) => edge.to);
       chunks.push(
         draft(brain, {
           id: `dependency:${file.path}`,
           kind: "dependency",
           title: `Dependencies of ${file.path}`,
           summary: edges.map((edge) => `${edge.kind}: ${edge.to}`).join("; "),
-          sourcePaths: [file.path],
+          // A dependency fact is only current while both the importing module
+          // and its resolved internal targets retain their fingerprints.
+          sourcePaths: [file.path, ...internalTargets],
           evidence: edges.flatMap((edge) => edge.evidence),
         }),
       );
     }
   }
+  for (const fact of brain.facts ?? []) chunks.push(draft(brain, {
+    id: `fact:${fact.kind}:${fact.source}:${fact.line}:${fact.name}`, kind: fact.kind === "documentation" || fact.kind === "setup" ? "documentation" : "configuration",
+    title: fact.name, summary: fact.summary, sourcePaths: [fact.source], evidence: [{ source: fact.source, line: fact.line, detail: fact.kind, confidence: fact.confidence }],
+  }));
   for (const route of brain.routes) {
     chunks.push(
       draft(brain, {
@@ -185,4 +192,65 @@ export function reconcileMemory(
   const currentIds = new Set(chunks.map((chunk) => chunk.id));
   changes.removed = [...prior.keys()].filter((id) => !currentIds.has(id)).sort();
   return { schemaVersion: 1, chunks, changes, reconciledAt: now };
+}
+
+/** A compact, deterministic answer for broad repository-orientation questions. */
+export function deriveRepositoryProfile(brain: RepositoryBrain): RepositoryProfile {
+  const paths = [...brain.files.map((file) => file.path), ...(brain.trackedFiles ?? []).map((file) => file.path)];
+  const directoryCounts = new Map<string, number>();
+  for (const file of paths) {
+    const parts = file.split("/");
+    const top = parts[0];
+    if (parts.length > 1 && top && !top.includes(".")) directoryCounts.set(top, (directoryCounts.get(top) ?? 0) + 1);
+  }
+  const purpose = (directory: string) => ({
+    app: "application routes, pages, layouts, and handlers",
+    pages: "Pages Router routes and API handlers",
+    src: "primary application source",
+    lib: "shared application logic",
+    components: "reusable UI components",
+    prisma: "Prisma data schema and migrations",
+    tests: "automated tests",
+    scripts: "repository automation scripts",
+    docs: "project documentation",
+  }[directory] ?? "tracked repository area");
+  const stack = [...new Set(brain.packages.flatMap((pkg) => [
+    pkg.framework === "unknown" ? "" : pkg.framework,
+    ...Object.keys(pkg.dependencies),
+  ]).filter(Boolean))].sort();
+  const entryPoints = [
+    ...brain.routes.map((route) => `${route.kind} ${route.path} (${route.file})`),
+    ...brain.files
+      .filter((file) => /(?:^|\/)(?:index|main|cli)\.[cm]?[jt]sx?$/.test(file.path))
+      .map((file) => file.path),
+  ].slice(0, 40);
+  const evidence = [
+    ...brain.packages.flatMap((pkg) => pkg.evidence),
+    ...brain.routes.flatMap((route) => route.evidence),
+  ].slice(0, 40);
+  return {
+    summary: brain.architectureSummary,
+    stack,
+    directories: [...directoryCounts.entries()]
+      .sort(([left], [right]) => left.localeCompare(right))
+      .slice(0, 20)
+      .map(([path]) => ({ path, purpose: purpose(path) })),
+    entryPoints,
+    evidence,
+    unknowns: paths.some((file) => /^README(?:\.md)?$/i.test(file))
+      ? ["Repository purpose is inferred from deterministic structure; documentation prose is not interpreted automatically."]
+      : ["No repository README was tracked; human product intent is unknown."],
+  };
+}
+
+export function reconcileLearnedMemory(
+  brain: RepositoryBrain,
+  findings: LearnedFinding[] = [],
+): LearnedFinding[] {
+  const hashes = new Map(brain.files.map((file) => [file.path, file.hash]));
+  return findings.map((finding) => {
+    if (finding.authority === "human" || finding.state !== "current") return finding;
+    const stale = finding.sources.some((source) => hashes.get(source.path) !== source.sourceHash);
+    return stale ? { ...finding, state: "stale" as const } : finding;
+  });
 }

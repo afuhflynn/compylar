@@ -7,7 +7,7 @@ import {
 import { RepositoryBrain } from "../types.js";
 
 const brain: RepositoryBrain = {
-  brainVersion: 2,
+  brainVersion: 3,
   repo: {
     name: "demo",
     rootPath: "/tmp/demo",
@@ -112,15 +112,10 @@ describe("context builder", () => {
     expect(withPreview.selectedFiles[0].preview).toContain("export default function Dashboard");
     expect(withPreview.budget).toMatchObject({ limitTokens: 1000, includesPreviews: true });
 
-    const capped = buildContext(brain, "update dashboard authentication", {
+    expect(() => buildContext(brain, "update dashboard authentication", {
       includePreview: true,
       budgetTokens: 100,
-    });
-    expect(capped.selectedFiles[0].preview).toBeUndefined();
-    expect(capped.budget.excludedEvidence).toContainEqual({
-      path: "app/dashboard/page.tsx",
-      reason: "budget",
-    });
+    })).toThrow("at least 512");
   });
 });
 describe("context ranking", () => {
@@ -141,12 +136,28 @@ describe("context ranking", () => {
     });
   });
 
-  it("marks underspecified debugging requests as read-only context", () => {
-    const result = buildContextResult(brain, "fix dashboard loading");
+  it("fails closed when a requested system has no repository evidence", () => {
+    const result = buildContextResult(brain, "How does authentication work?");
     expect(result.status).toBe("context-ready");
+    if (result.status === "context-ready") {
+      expect(result.selectedFiles).toEqual([]);
+      expect(result.systems).toEqual([]);
+      expect(result.coverage).toMatchObject({ decision: "insufficient-index" });
+      expect(result.coverage.unresolved).toContain("no-evidence");
+    }
+  });
+
+  it("requires clarification for debugging requests without a target or symptom", () => {
+    const result = buildContextResult(brain, "fix it");
+    expect(result).toMatchObject({ status: "needs-clarification", intent: "ambiguous" });
+  });
+
+  it("requires clarification for debugging requests that omit a reproducible symptom", () => {
+    const result = buildContextResult(brain, "fix dashboard loading");
+    expect(result.status).toBe("needs-clarification");
     expect(result).toMatchObject({
-      intent: "debugging",
-      actionability: "underspecified",
+      intent: "ambiguous",
+      actionability: "ambiguous",
       mutationAllowed: false,
     });
     expect(result.missingInformation).toContain("observed symptom");
@@ -194,5 +205,20 @@ describe("context ranking", () => {
       }),
     ]);
     expect(result.coverage).toMatchObject({ decision: "memory-sufficient" });
+  });
+
+  it("answers broad repository questions from the profile rather than incidental files", () => {
+    const result = buildContext(brain, "What is this project? What does it do? What is the tech stack?");
+    expect(result.queryPlan.strategy).toBe("repository-profile");
+    expect(result.selectedFiles).toEqual([]);
+    expect(result.coverage.decision).toBe("memory-sufficient");
+    expect(result.overview?.stack).toContain("nextjs");
+  });
+
+  it("does not call architecture memory sufficient when the explicit semantic index is absent", () => {
+    const result = buildContext({ ...brain, semanticIndex: { schemaVersion: 1, status: "absent", coverage: [], blockers: [], unknowns: [], findingCount: 0 } }, "How does the dashboard architecture work?");
+    expect(result.coverage).toMatchObject({ decision: "insufficient-index" });
+    expect(result.coverage.unresolved).toContain("semantic-architecture-memory-not-complete");
+    expect(result.queryPlan.sourceReadRequired).toBe(true);
   });
 });
