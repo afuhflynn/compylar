@@ -27,7 +27,7 @@ Built with Codex and GPT-5.6 during OpenAI Build Week. The submission evidence i
 ## Judge testing instructions
 
 ```bash
-npx -y compylar@0.1.0 demo
+npx -y compylar@0.1.1 demo
 
 # Optional source-checkout verification
 pnpm install
@@ -35,7 +35,7 @@ pnpm build
 pnpm benchmark
 ```
 
-`npx -y compylar@0.1.0 demo` runs the packaged CLI against a temporary fixture copy and proves compile → context → changed-path detection → refresh, with no clone or rebuild required. `pnpm benchmark` is optional source-checkout verification. No OpenAI API key is required.
+`npx -y compylar@0.1.1 demo` runs the packaged CLI against a temporary fixture copy and proves compile → context → changed-path detection → refresh, with no clone or rebuild required. `pnpm benchmark` is optional source-checkout verification. No OpenAI API key is required.
 
 ## Demo video narration (under three minutes)
 
@@ -47,7 +47,7 @@ Show the fixture and task: “Add authentication to the dashboard.”
 
 ### 0:20–0:50 — compile once
 
-Run `npx -y compylar@0.1.0 demo` or `compylar compile examples/nextjs-demo --no-ai`. Explain that Compylar produces deterministic, evidence-backed repository memory rather than a one-off summary.
+Run `npx -y compylar@0.1.1 demo` or `compylar compile examples/nextjs-demo --no-ai`. Explain that Compylar produces deterministic, evidence-backed repository memory rather than a one-off summary.
 
 ### 0:50–1:25 — retrieve, do not rediscover
 

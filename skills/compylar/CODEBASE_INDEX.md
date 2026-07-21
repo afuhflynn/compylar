@@ -24,7 +24,7 @@ Write `.compylar/semantic-index.json`, then run `compylar ingest-index .`. The m
 ```json
 {
   "schemaVersion": 1,
-  "producer": { "name": "codebase-index", "version": "bundled-with-compylar-0.1.0" },
+  "producer": { "name": "codebase-index", "version": "bundled-with-compylar-0.1.1" },
   "generatedAt": "ISO-8601 timestamp",
   "brainFingerprint": "output from compylar bootstrap/brain JSON",
   "artifact": { "path": "CODEBASE_INDEX.md", "sha256": "sha256 of the exact artifact bytes" },

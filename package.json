@@ -1,6 +1,6 @@
 {
   "name": "compylar",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "packageManager": "pnpm@11.15.0",
   "description": "Compylar is a local Knowledge Compiler for AI coding agents. It analyzes a TypeScript or JavaScript repository, records evidence-backed repository facts, and creates task-specific context packs that an agent can use without rediscovering the whole codebase.",
   "engines": {

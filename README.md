@@ -12,12 +12,22 @@ Compylar is a local Knowledge Compiler for AI coding agents. It analyzes a TypeS
 - `status` compares the working tree with the last successful compile baseline.
 - Memory chunks have stable identities, source fingerprints, and evidence; unchanged chunks survive refreshes unchanged.
 
+## Built with Codex and GPT-5.6
+
+Compylar was built during OpenAI Build Week with Codex as the primary coding agent and GPT-5.6 for architecture review, implementation planning, debugging, and documentation refinement.
+
+Codex was used to inspect the repository, implement CLI workflows, improve the persistent-memory model, build the agent setup flow, create the packaged npm demo, remove unused MCP runtime code, and validate behavior with type checks, tests, builds, npm packaging checks, and end-to-end demo runs.
+
+GPT-5.6 helped shape the product thesis: coding agents should rely on durable, evidence-backed repository memory instead of rediscovering the same codebase every session.
+
+The core Compylar workflow remains deterministic and does not require an OpenAI API key.
+
 ## First 60 seconds
 
 Run the judge-ready demonstration directly from npm—no clone or build required:
 
 ```bash
-npx -y compylar@0.1.0 demo
+npx -y compylar@0.1.1 demo
 ```
 
 To use Compylar in a repository, install the CLI once:
@@ -95,7 +105,7 @@ pnpm build
 ```
 
 Source builds are for contributors. For a packaged end-to-end proof, run
-`npx -y compylar@0.1.0 demo` after the package is published.
+`npx -y compylar@0.1.1 demo` after the package is published.
 
 The build verifies that the generated CLI entrypoint is executable on POSIX systems. On Windows, npm provides the normal `.cmd` launcher instead; no Unix permission bit is required.
 
@@ -263,7 +273,7 @@ pnpm build
 ```
 
 Run the complete temporary-fixture demonstration with `compylar demo` (or
-`npx -y compylar@0.1.0 demo` after publishing). It never changes the checked-in
+`npx -y compylar@0.1.1 demo` after publishing). It never changes the checked-in
 example repository. `pnpm demo` remains the source-checkout equivalent.
 
 Run `pnpm first-run` for the compact version: selected task context, the exact detected change, memory reuse, and elapsed work—without the full context document.
